@@ -286,14 +286,15 @@ Common GND ───────┬─→ Pico pins 3, 8, 13, 18, 23, 28, 33, 38
 
 Working code lives in **`pico-rom-test/`** (Pico firmware) and **`rom-builder/`** (host tools).
 
-### What the Pico firmware does
+### What the Pico firmware does (auto-run)
 
-1. **Generate PHI2** — GP28 as PWM square wave. Commands: `c100` (100 kHz), `c500`, `c1` (1 MHz), `cs` (stop).
-2. **Reset control** — GP27 starts as OUTPUT LOW. Commands: `r0` (hold reset), `r1` (release — switches to INPUT, pull-up runs CPU).
-3. **ROM emulation** — 32 KB `rom_image[]` in SRAM, mapped to CPU $8000–$FFFF. When A15 = 1, drive GP15–GP22 from `rom_image[addr & 0x7FFF]`; when A15 = 0, data bus Hi-Z. Commands: `rom` / `roms`. Implemented with **GPIO polling** (works reliably at 100 kHz–1 MHz on this build; PIO+DMA is a future upgrade).
-4. **ROM upload** — `loadbin` receives 32 KB raw binary over USB-CDC into `rom_image[]`.
-5. **Bus watch (print port)** — `watch 4000` prints data whenever the CPU accesses that address. Demo program writes `$05` then `$08` to `$4000` each loop. Firmware filters spurious samples where data equals the address high byte (breadboard crosstalk).
-6. **Debug** — `a` / `am` / `as` (address bus), `s` (status), `h` (help).
+1. **Auto-start on USB connect** — clock, ROM emulation, and RESET release happen automatically. No commands needed.
+2. **Generate PHI2** — GP28 as PWM square wave at **100 kHz** on boot (safe starting speed).
+3. **Reset control** — GP27 starts as OUTPUT LOW, then releases to INPUT (pull-up runs CPU) once USB is connected.
+4. **ROM emulation** — 32 KB `rom_image[]` in SRAM, mapped to CPU $8000–$FFFF. When A15 = 1, drive GP15–GP22 from `rom_image[addr & 0x7FFF]`; when A15 = 0, data bus Hi-Z. Implemented with **GPIO polling** (works reliably at 100 kHz–1 MHz on this build; PIO+DMA is a future upgrade).
+5. **Built-in demo program** — the firmware ships with a tiny demo at $8000 that writes `$05` then `$08` to `$4000` each loop. Open any serial monitor and the data appears immediately.
+6. **Bus watch (print port)** — the firmware automatically watches `$4000` and prints data bytes over USB-CDC. It filters spurious samples where data equals the address high byte (breadboard crosstalk).
+7. **ROM upload** — send `loadbin` followed by 32 KB raw bytes to replace the image. RESET is asserted during the upload so the CPU doesn't read half-written data.
 
 Flash **`pico-rom-test/build/pico-rom-test.uf2`** to the Pico (BOOTSEL + drag, or `picotool load`).
 
@@ -304,11 +305,11 @@ Flash **`pico-rom-test/build/pico-rom-test.uf2`** to the Pico (BOOTSEL + drag, o
 cd rom-builder
 python3 build-rom.py          # → bin/rom.bin
 
-# 2. Upload to Pico and start the CPU (closes any stale screen session first)
-python3 upload-rom.py         # loadbin → rom on → watch 4000 → c100 → r1
+# 2. Upload to Pico and start the CPU
+python3 upload-rom.py         # sends loadbin → 32 KB raw bytes
 ```
 
-Expected output after upload:
+Expected output in your serial monitor immediately after plugging in the Pico:
 
 ```
 [$4000 = $05]
@@ -317,7 +318,7 @@ Expected output after upload:
 ...
 ```
 
-**Note:** `rom_image[]` is lost on Pico power cycle — re-run `upload-rom.py` after each reboot. Only one program can hold `/dev/ttyACM0` at a time; exit `screen` (`Ctrl-A k`) before uploading.
+**Note:** `rom_image[]` is lost on Pico power cycle — re-run `upload-rom.py` after each reboot. Only one program can hold `/dev/ttyACM0` at a time; close your serial monitor before uploading.
 
 ### Demo program (in `build-rom.py`)
 
@@ -348,29 +349,18 @@ $FFFC: $8000           ; reset vector
 ## 9. Bring-up sequence
 
 1. **Wire per §6**, flash **`pico-rom-test.uf2`**, connect USB (Pico) + external 3.3 V (breadboard), common GND.
-2. **Open serial** — `python3 upload-rom.py` handles upload and live output; or `picocom /dev/ttyACM0 -b 115200` for interactive commands (only one at a time).
-3. **Hardware smoke test** (interactive serial):
-   ```
-   r0          ; hold CPU in reset
-   c100        ; 100 kHz clock — safe starting speed
-   r1          ; release reset
-   am          ; address bus should be changing
-   as          ; stop monitor
-   ```
-4. **Dumb-ROM test** (no upload needed after fresh boot):
-   ```
-   rom         ; serve $EA NOPs for all ROM reads
-   r0 / r1
-   am          ; addresses should march through $8000+ region
-   ```
-5. **Full program test:**
+2. **Open serial monitor** — `python3 upload-rom.py` handles upload and live output; or any serial monitor at 115200 baud (e.g. `picocom /dev/ttyACM0 -b 115200`). The Pico auto-runs on USB connect — data appears immediately without typing any commands.
+3. **Dumb-ROM test** (no upload needed after fresh boot):
+   - Plug in USB — the built-in demo starts automatically.
+   - You should see `[$4000 = $05]` / `[$4000 = $08]` alternating in the serial monitor.
+4. **Full program test:**
    ```bash
    cd rom-builder
    python3 build-rom.py
    python3 upload-rom.py
    ```
-   Expect `[$4000 = $05]` / `[$4000 = $08]` alternating. Increase speed with `c500` or `c1` once stable.
-6. **RAM test (optional):** program that `STA`s then `LDA`s from `$0200`. HM62256 at 3.3 V may still be flaky — if reads fail, try slower clock or replace with 3.3 V SRAM later.
+   Expect the same watch output with your custom program.
+5. **RAM test (optional):** program that `STA`s then `LDA`s from `$0200`. HM62256 at 3.3 V may still be flaky — if reads fail, the built-in demo (which only writes to RAM) still works fine.
 
 ---
 
@@ -380,14 +370,14 @@ $FFFC: $8000           ; reset vector
 |---|---|
 | Address bus stuck at one value, never changes | No clock on PHI2 (check GP28 wire to CPU pin 37) or power fight (external 3.3 V on Pico VSYS while USB connected) |
 | 65C02 address bus doesn't change | RDY floating (verify R1) or clock not reaching CPU |
-| Address bus changes but stuck at $FFFE forever | CPU in reset (RESB low — check R5 + Pico GP27 = INPUT after `r1`) |
-| Address goes $FFFC, $FFFD, then random garbage | ROM emu off (`rom` not enabled) or D0–D7 / address lines mis-wired |
+| Address bus changes but stuck at $FFFE forever | CPU in reset (RESB low — check R5 + Pico GP27 should be INPUT after boot) |
+| Address goes $FFFC, $FFFD, then random garbage | D0–D7 / address lines mis-wired, or ROM image wasn't uploaded correctly |
 | Reset vector fetches correct bytes but jumps to wrong address | Endianness — reset vector low byte at $FFFC, high byte at $FFFD |
-| Watch shows `$50` at `$5000` or `$40` at `$4000` | Address-line crosstalk onto data bus — use `$4000` print port; firmware filters high-byte matches |
-| Watch shows `$05` but never `$08`, or CPU crashes quickly | RAM OE# still on GND — move to +3.3 V; or drop clock to `c100` |
-| RAM reads return garbage (writes seem to work) | HM62256 at 3.3 V out of spec — try `c100`; replace with 3.3 V SRAM for production |
+| Watch shows `$50` at `$5000` or `$40` at `$4000` | Address-line crosstalk onto data bus — the built-in watch at `$4000` filters high-byte matches |
+| Watch shows `$05` but never `$08`, or CPU crashes quickly | RAM OE# still on GND — move to +3.3 V |
+| RAM reads return garbage (writes seem to work) | HM62256 at 3.3 V out of spec — replace with 3.3 V SRAM for production |
 | Random behavior when touching breadboard | Loose wire or missing decoupling — re-seat connections; 100 nF cap helps |
-| `upload-rom.py`: Device or resource busy | `screen` or another program holds `/dev/ttyACM0` — kill it first |
+| `upload-rom.py`: Device or resource busy | Serial monitor or another program holds `/dev/ttyACM0` — close it first |
 | Pico USB disconnects when 65C02 boots | Brownout — 3.3 V supply can't deliver enough current |
 
 ---
@@ -397,13 +387,13 @@ $FFFC: $8000           ; reset vector
 **Can:**
 - Run the 65C02 from a Pico-hosted 32 KB ROM image ($8000–$FFFF)
 - Build ROM on a laptop (`build-rom.py`), upload over USB (`upload-rom.py` / `loadbin`)
-- Reset the 65C02 and change clock speed from the Pico
-- Snoop a virtual print port (`watch 4000`) — see CPU stores over USB
+- Auto-start clock, ROM, and reset on USB connect — no manual commands needed
+- Snoop a virtual print port ($4000) — see CPU stores over USB immediately
 - Read and write RAM (subject to HM62256 + 3.3 V behavior)
 
 **Cannot (deliberately deferred for the prototype):**
 - Fail-safe behavior when Pico is unpowered — line state of RESB is governed only by the pull-up, which is correct, but the data bus could be back-powered through Pico GPIO protection diodes. Don't leave a powered 65C02 connected to an unpowered Pico for long.
-- Tri-state the CPU mid-program for hot-swap ROM updates — BE is permanently held high. To update the ROM you must drive RESET# low first.
+- Tri-state the CPU mid-program for hot-swap ROM updates — BE is permanently held high. To update the ROM you must trigger `loadbin`, which asserts RESET automatically.
 - Robust noise immunity — no decoupling caps.
 - Guaranteed RAM reliability — HM62256 is out of spec at 3.3 V.
 

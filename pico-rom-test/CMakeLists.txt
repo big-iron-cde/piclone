@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.13)
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 
 # Use the same SDK import shim that picoprom uses.
-include(${CMAKE_CURRENT_LIST_DIR}/../picoprom/pico_sdk_import.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../../picoprom/pico_sdk_import.cmake)
 
 project(pico-rom-test C CXX ASM)
 
@@ -21,7 +21,6 @@ add_executable(pico-rom-test
 
 target_link_libraries(pico-rom-test
     pico_stdlib
-    hardware_pwm
     hardware_gpio
     hardware_clocks
     hardware_sync

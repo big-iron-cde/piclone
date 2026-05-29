@@ -1,0 +1,173 @@
+# =============================================================================
+# C / C++ build artifacts
+# =============================================================================
+
+# Object files
+*.o
+*.obj
+*.elf
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+*.bin
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Dependency files
+*.d
+
+# =============================================================================
+# CMake
+# =============================================================================
+
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Build directories (common names)
+**/build/
+**/build-*/
+**/out/
+**/out-*/
+**/cmake-build-*/
+
+# =============================================================================
+# Raspberry Pi Pico SDK / Pico-specific
+# =============================================================================
+
+# Generated UF2 files are build artifacts (keep source, ignore output)
+# Note: if you want to distribute pre-built UF2s, comment this out
+*.uf2
+
+# Pico SDK generated files
+pico-sdk/
+generated/
+pioasm/
+pioasm-install/
+pico_flash_region.ld
+
+# Disassembly / map files (large, regenerated)
+*.dis
+*.map
+
+# =============================================================================
+# Python (for host-side tooling like rom-builder/)
+# =============================================================================
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# =============================================================================
+# IDEs and editors
+# =============================================================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# CLion / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.cmake/
+
+# Eclipse
+.project
+.cproject
+.settings/
+
+# Visual Studio
+*.vcxproj
+*.vcxproj.filters
+*.sln
+.vs/
+
+# Xcode
+*.xcworkspace
+*.xcuserstate
+*.xcuserdata
+
+# =============================================================================
+# OS-generated files
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# Linux
+*~
+.nfs*
+
+# =============================================================================
+# Miscellaneous
+# =============================================================================
+
+# Backup files
+*.bak
+*.swp
+*.swo
+*~
+
+# Tags
+TAGS
+tags
+cscope.*
+
+# Log files
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp

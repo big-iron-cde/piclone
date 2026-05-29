@@ -49,7 +49,7 @@ def main():
     pc = write_bytes(rom, pc, 0x18)               # CLC
     pc = write_bytes(rom, pc, 0xA9, 0x05)         # LDA #$05
     pc = write_bytes(rom, pc, 0x8D, 0x00, 0x40)   # STA $4000
-    pc = write_bytes(rom, pc, 0x69, 0x03)         # ADC #$03
+    pc = write_bytes(rom, pc, 0x69, 0x10)         # ADC #$03
     pc = write_bytes(rom, pc, 0x8D, 0x00, 0x40)   # STA $4000
     pc = write_bytes(rom, pc, 0x4C, 0x00, 0x80)   # JMP $8000
 

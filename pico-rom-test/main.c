@@ -1,19 +1,15 @@
 /*
  * pico-rom-test — Pico-as-ROM firmware for the breadboard 6502 prototype
  *
- * Connects to a W65C02S + HM62256LP system on a breadboard. Provides a
- * USB-CDC command interface for hardware bring-up plus a real 32 KB ROM
- * image that the CPU sees mapped at $8000-$FFFF.
+ * Auto-run variant: no interactive command interface. On USB connect the
+ * firmware immediately starts the 65C02 clock, enables ROM emulation,
+ * releases RESET, and streams watch-port data over USB-CDC.
  *
- *   PHI2 clock generation     →  c1 / c2 / c4 / c<khz> / cs
- *   RESET drive               →  r0 / r1
- *   Address bus sampling      →  a / am / as
- *   ROM emulation             →  rom / roms     (serves rom_image[])
- *   ROM upload (binary)       →  loadbin        (host pipes 32 KB)
- *   Bus watch (print port)    →  watch <hex> / unwatch
+ * Connect over USB serial at any baud and the data appears immediately.
  *
- * Connect over USB serial at any baud (USB-CDC ignores it) and type the
- * commands followed by Enter. See upload-rom.py for pushing rom.bin.
+ * To upload a custom 32 KB ROM image, send the line "loadbin" followed
+ * by 32768 raw bytes. The built-in demo program (stores $05 / $08 at
+ * $4000) runs out of the box if no upload is performed.
  */
 
 #include <stdio.h>
@@ -23,7 +19,6 @@
 
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
-#include "hardware/pwm.h"
 #include "hardware/gpio.h"
 #include "hardware/sync.h"
 #include "hardware/clocks.h"
@@ -50,9 +45,6 @@ static uint8_t rom_image[ROM_SIZE];
 static bool monitor_addr = false;
 static bool rom_active   = false;
 
-// Watch: when the CPU bus address matches `watch_addr`, the data byte on the
-// bus at that moment is forwarded over USB. Useful for treating a specific
-// memory address as a virtual "print port".
 static bool     watch_active = false;
 static uint16_t watch_addr   = 0x4000;
 static volatile uint8_t watch_pending_data = 0;
@@ -80,42 +72,46 @@ static void pins_init(void) {
     gpio_set_dir(PIN_RESET, GPIO_OUT);
     gpio_put(PIN_RESET, 0);
 
-    // PHI2 starts as PWM but stopped
+    // PHI2 starts as GPIO output, held low
     gpio_init(PIN_PHI2);
     gpio_set_dir(PIN_PHI2, GPIO_OUT);
     gpio_put(PIN_PHI2, 0);
 }
 
 // ─── PHI2 (clock) ────────────────────────────────────────────────────────
+// Timer-alarm based square wave.  Works from 1 Hz up to ~100 kHz.
+
+static alarm_id_t phi2_alarm_id = 0;
+static uint32_t   phi2_half_us  = 0;
+
+static int64_t phi2_alarm_callback(alarm_id_t id, void *user_data) {
+    (void)id;
+    (void)user_data;
+    gpio_xor_mask(1u << PIN_PHI2);
+    return (int64_t)phi2_half_us;   // reschedule in half_period_us
+}
 
 static void phi2_start(uint32_t target_hz) {
-    gpio_set_function(PIN_PHI2, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(PIN_PHI2);
-    uint chan  = pwm_gpio_to_channel(PIN_PHI2);
+    // Ensure pin is under SIO control
+    gpio_set_function(PIN_PHI2, GPIO_FUNC_SIO);
+    gpio_set_dir(PIN_PHI2, GPIO_OUT);
+    gpio_put(PIN_PHI2, 0);
 
-    // Pico 2 default sys clock = 150 MHz. Pico (RP2040) = 125 MHz.
-    // We'll pick a wrap value that gives us target_hz square wave.
-    uint32_t sys_hz = clock_get_hz(clk_sys);
-    uint32_t wrap   = sys_hz / target_hz;
-    if (wrap < 4)    wrap = 4;
-    if (wrap > 65535) wrap = 65535;
+    if (target_hz == 0) target_hz = 1;
+    phi2_half_us = 500000u / target_hz;
+    if (phi2_half_us < 2) phi2_half_us = 2;   // ~250 kHz ceiling
 
-    pwm_set_clkdiv(slice, 1.0f);
-    pwm_set_wrap(slice, wrap - 1);
-    pwm_set_chan_level(slice, chan, wrap / 2);  // 50% duty
-    pwm_set_enabled(slice, true);
+    phi2_alarm_id = add_alarm_in_us(phi2_half_us, phi2_alarm_callback, NULL, true);
 
-    printf("PHI2 on: target %lu Hz, actual %lu Hz (wrap=%lu)\n",
-           (unsigned long)target_hz,
-           (unsigned long)(sys_hz / wrap),
-           (unsigned long)wrap);
+    printf("PHI2 on: target %lu Hz (half-period=%lu us)\n",
+           (unsigned long)target_hz, (unsigned long)phi2_half_us);
 }
 
 static void phi2_stop(void) {
-    uint slice = pwm_gpio_to_slice_num(PIN_PHI2);
-    pwm_set_enabled(slice, false);
-    gpio_set_function(PIN_PHI2, GPIO_FUNC_SIO);
-    gpio_set_dir(PIN_PHI2, GPIO_OUT);
+    if (phi2_alarm_id) {
+        cancel_alarm(phi2_alarm_id);
+        phi2_alarm_id = 0;
+    }
     gpio_put(PIN_PHI2, 0);
     printf("PHI2 off (held low)\n");
 }
@@ -129,7 +125,6 @@ static void reset_assert(void) {
 }
 
 static void reset_release(void) {
-    // Open-drain emulation: switch to INPUT so the pull-up brings line high
     gpio_set_dir(PIN_RESET, GPIO_IN);
     printf("RESET released (CPU should run)\n");
 }
@@ -149,12 +144,33 @@ static uint8_t data_read(void) {
 }
 
 // ─── ROM image ──────────────────────────────────────────────────────────
-// rom_image[] holds the 32 KB ROM contents that the CPU sees mapped at
-// $8000-$FFFF. On boot it's filled with $EA (NOPs) so the CPU walks
-// straight through ROM forever — same behaviour as before `loadbin`.
 
 static void rom_image_init(void) {
     memset(rom_image, 0xEA, sizeof(rom_image));
+
+    // ── Built-in demo program at CPU $8000 ─────────────────────────────
+    // CLC
+    // LDA #$05
+    // STA $4000          ; Pico watch port
+    // ADC #$03           ; A = 8
+    // STA $4000
+    // JMP $8000
+    // --------------------------------------------------------------------
+    rom_image[0x0000] = 0x18;       // CLC
+    rom_image[0x0001] = 0xA9;       // LDA #$05
+    rom_image[0x0002] = 0x05;
+    rom_image[0x0003] = 0x8D;       // STA $4000
+    rom_image[0x0004] = 0x00;
+    rom_image[0x0005] = 0x40;
+    rom_image[0x0006] = 0x69;       // ADC #$03
+    rom_image[0x0007] = 0x03;
+    rom_image[0x0008] = 0x8D;       // STA $4000
+    rom_image[0x0009] = 0x00;
+    rom_image[0x000A] = 0x40;
+    rom_image[0x000B] = 0x4C;       // JMP $8000
+    rom_image[0x000C] = 0x00;
+    rom_image[0x000D] = 0x80;
+
     // Default reset vector: $FFFC/$FFFD → $8000
     rom_image[0xFFFC - 0x8000] = 0x00;
     rom_image[0xFFFD - 0x8000] = 0x80;
@@ -163,10 +179,7 @@ static void rom_image_init(void) {
     rom_image[0xFFFF - 0x8000] = 0x80;
 }
 
-// ─── ROM emulation (polling) ────────────────────────────────────────────
-// Each iteration: snapshot the bus, drive data when CPU is reading ROM,
-// and capture watch events. Critical that this stays fast — no printf
-// in here. Watch prints happen later from the main loop.
+// ─── ROM emulation (polling) ───────────────────────────────────────────
 
 static void rom_task(void) {
     uint32_t pins = gpio_get_all();
@@ -188,8 +201,6 @@ static void rom_task(void) {
         if (a15) addr |= 0x8000u;
         if (addr == watch_addr) {
             uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
-            // Breadboard crosstalk: the high address byte often bleeds onto D0-D7
-            // during writes (e.g. watch $4000 → spurious $40, watch $5000 → $50).
             if (data == (uint8_t)(watch_addr >> 8)) {
                 return;
             }
@@ -200,14 +211,6 @@ static void rom_task(void) {
 }
 
 // ─── ROM upload (raw binary over USB-CDC) ───────────────────────────────
-// Protocol:
-//   host → "loadbin\n"
-//   pico → "OK send 32768 bytes\n"
-//   host → <32768 raw bytes>
-//   pico → "loaded 32768 bytes\n"
-//
-// ROM emulation is paused for the duration of the upload so we don't fight
-// the CPU's data bus. If the host stalls for >2 s the upload aborts.
 
 static void cmd_loadbin(void) {
     printf("OK send %d bytes\n", ROM_SIZE);
@@ -216,6 +219,7 @@ static void cmd_loadbin(void) {
     bool was_active = rom_active;
     rom_active = false;
     gpio_set_dir_in_masked(DATA_MASK);
+    reset_assert();
 
     int n = 0;
     absolute_time_t deadline = make_timeout_time_ms(2000);
@@ -225,6 +229,7 @@ static void cmd_loadbin(void) {
             if (absolute_time_diff_us(get_absolute_time(), deadline) <= 0) {
                 printf("\nupload timeout after %d bytes\n", n);
                 rom_active = was_active;
+                reset_release();
                 return;
             }
             continue;
@@ -234,125 +239,20 @@ static void cmd_loadbin(void) {
     }
 
     rom_active = was_active;
+    reset_release();
     printf("loaded %d bytes\n", n);
-    printf("  reset vector → $%02X%02X\n",
+    printf("  reset vector -> $%02X%02X\n",
            rom_image[0xFFFD - 0x8000], rom_image[0xFFFC - 0x8000]);
-}
-
-// ─── Command handling ───────────────────────────────────────────────────
-
-static void show_help(void) {
-    printf(
-        "\nCommands:\n"
-        "  c1 / c2 / c4   start PHI2 clock at 1 / 2 / 4 MHz\n"
-        "  c500           start PHI2 at 500 kHz (use c<freq_khz> for any value)\n"
-        "  cs             stop PHI2\n"
-        "  r0             assert RESET (CPU halt)\n"
-        "  r1             release RESET (CPU run)\n"
-        "  a              sample address bus once\n"
-        "  am             monitor address bus continuously (5x/sec)\n"
-        "  as             stop monitor\n"
-        "  rom            start ROM emulator (serves rom_image[] over $8000-$FFFF)\n"
-        "  roms           stop ROM emulator (data bus → Hi-Z)\n"
-        "  loadbin        upload a 32 KB ROM image over USB-CDC\n"
-        "  watch <hex>    print data byte whenever bus address == <hex> (default $4000)\n"
-        "  unwatch        stop watching\n"
-        "  s              status\n"
-        "  h / ?          this help\n\n"
-    );
-}
-
-static void show_status(void) {
-    printf("Status:\n");
-    printf("  Monitor: %s\n", monitor_addr ? "ON" : "off");
-    printf("  ROM emu: %s\n", rom_active   ? "ON" : "off");
-    printf("  Watch:   %s (addr=$%04X)\n",
-           watch_active ? "ON" : "off", watch_addr);
-    printf("  RESET:   %s\n", (gpio_get_dir(PIN_RESET) == GPIO_OUT) ? "ASSERTED" : "released");
-    printf("  Last addr: $%04X  data: $%02X\n", addr_read(), data_read());
-    printf("  ROM[$8000..$8005] = %02X %02X %02X %02X %02X %02X\n",
-           rom_image[0], rom_image[1], rom_image[2],
-           rom_image[3], rom_image[4], rom_image[5]);
-    printf("  Reset vector → $%02X%02X\n",
-           rom_image[0xFFFD - 0x8000], rom_image[0xFFFC - 0x8000]);
-}
-
-static void handle_cmd(const char *line) {
-    // Skip leading whitespace
-    while (*line && isspace((unsigned char)*line)) line++;
-    if (*line == 0) return;
-
-    if (line[0] == 'c') {
-        if (line[1] == 's') {
-            phi2_stop();
-        } else if (isdigit((unsigned char)line[1])) {
-            int khz = atoi(line + 1);
-            if (khz == 0) {
-                printf("?? bad freq\n");
-                return;
-            }
-            // c1 = 1 MHz, c2 = 2 MHz, c4 = 4 MHz, anything else = kHz
-            uint32_t hz;
-            if (khz < 100)  hz = (uint32_t)khz * 1000000;  // c1..c4 = MHz
-            else            hz = (uint32_t)khz * 1000;     // c500 = 500 kHz
-            phi2_start(hz);
-        } else {
-            printf("?? cs, c1, c2, c4, c500\n");
-        }
-    } else if (line[0] == 'r') {
-        // Longer commands first so "rom"/"roms" aren't shadowed by "r0"/"r1".
-        if (strncmp(line, "roms", 4) == 0) {
-            rom_active = false;
-            gpio_set_dir_in_masked(DATA_MASK);
-            printf("ROM emu off\n");
-        } else if (strncmp(line, "rom", 3) == 0) {
-            rom_active = true;
-            printf("ROM emu on (serving rom_image[] over $8000-$FFFF)\n");
-        } else if (line[1] == '0') {
-            reset_assert();
-        } else if (line[1] == '1') {
-            reset_release();
-        } else {
-            printf("?? r0, r1, rom, roms\n");
-        }
-    } else if (line[0] == 'a') {
-        if (line[1] == 'm')      { monitor_addr = true;  printf("monitor on\n"); }
-        else if (line[1] == 's') { monitor_addr = false; printf("monitor off\n"); }
-        else {
-            printf("addr=$%04X data=$%02X\n", addr_read(), data_read());
-        }
-    } else if (strncmp(line, "loadbin", 7) == 0) {
-        cmd_loadbin();
-    } else if (strncmp(line, "watch", 5) == 0) {
-        const char *p = line + 5;
-        while (*p && isspace((unsigned char)*p)) p++;
-        if (*p) {
-            unsigned int addr = (unsigned int)strtoul(p, NULL, 16);
-            watch_addr = (uint16_t)(addr & 0xFFFFu);
-        }
-        watch_active       = true;
-        watch_have_printed = false;
-        watch_pending      = false;
-        printf("watch on, addr=$%04X\n", watch_addr);
-    } else if (strncmp(line, "unwatch", 7) == 0) {
-        watch_active = false;
-        printf("watch off\n");
-    } else if (line[0] == 's') {
-        show_status();
-    } else if (line[0] == 'h' || line[0] == '?') {
-        show_help();
-    } else {
-        printf("?? type 'h' for help\n");
-    }
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────────
 
 static void print_banner(void) {
-    printf("\n=== pico-rom-test — bring-up firmware ===\n");
+    printf("\n=== pico-rom-test — auto-run firmware ===\n");
     printf("65C02 + Pico-as-ROM + HM62256LP on 3.3 V\n");
-    show_help();
-    printf("ready> ");
+    printf("Clock: 1 Hz  ROM: ON  Watch: $%04X\n", watch_addr);
+    printf("Send 'loadbin' + 32768 raw bytes to upload a custom ROM.\n");
+    printf("Streaming data below...\n\n");
     stdio_flush();
 }
 
@@ -361,55 +261,48 @@ int main(void) {
     pins_init();
     rom_image_init();
 
-    // Onboard LED — gives a visual heartbeat so you can tell the firmware
-    // is actually running even if USB is misbehaving.
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
     // Wait (with a heartbeat) until the host opens the USB-CDC port.
-    // This means screen/minicom always sees the banner.
     absolute_time_t led_toggle = get_absolute_time();
     bool led_on = false;
     while (!stdio_usb_connected()) {
         if (absolute_time_diff_us(get_absolute_time(), led_toggle) <= 0) {
             led_on = !led_on;
             gpio_put(PICO_DEFAULT_LED_PIN, led_on);
-            led_toggle = make_timeout_time_ms(250);  // fast blink = waiting
+            led_toggle = make_timeout_time_ms(250);
         }
         tight_loop_contents();
     }
 
-    // Connected — print banner. Brief delay so the host terminal is ready.
+    // Connected — auto-start everything.
     sleep_ms(200);
+    phi2_start(1);          // 1 Hz — slow enough to watch by eye
+    rom_active   = true;
+    watch_active = true;
+    watch_have_printed = false;
+    watch_pending      = false;
+    reset_release();
     print_banner();
 
-    char line[64];
-    int  pos = 0;
-    absolute_time_t next_monitor = get_absolute_time();
-    absolute_time_t next_blink   = get_absolute_time();
     gpio_put(PICO_DEFAULT_LED_PIN, 1);  // solid on = connected & running
+
+    char line[16];
+    int  pos = 0;
+    absolute_time_t next_blink = get_absolute_time();
 
     while (true) {
         // ROM emulation runs every iteration (~MHz polling rate)
         rom_task();
 
-        // Slow heartbeat blink (1 Hz) so you can see firmware is alive
+        // Slow heartbeat blink (1 Hz)
         if (absolute_time_diff_us(get_absolute_time(), next_blink) <= 0) {
             gpio_xor_mask(1u << PICO_DEFAULT_LED_PIN);
             next_blink = make_timeout_time_ms(500);
         }
 
-        // Periodic address monitor (5 Hz)
-        if (monitor_addr && absolute_time_diff_us(get_absolute_time(), next_monitor) <= 0) {
-            uint16_t addr = addr_read();
-            uint8_t  data = data_read();
-            bool     a15  = gpio_get(PIN_A15);
-            printf("[mon] addr=$%04X data=$%02X a15=%d\n", addr, data, a15);
-            next_monitor = make_timeout_time_ms(200);
-        }
-
-        // Watch: print only on change so a tight loop doesn't flood the
-        // terminal. Snapshot the volatile so rom_task can overwrite freely.
+        // Watch: print only on change
         if (watch_pending) {
             uint8_t d = watch_pending_data;
             watch_pending = false;
@@ -420,35 +313,24 @@ int main(void) {
             }
         }
 
-        // Command input (non-blocking)
+        // Minimal serial input — only "loadbin" is recognised
         int c = getchar_timeout_us(0);
         if (c == PICO_ERROR_TIMEOUT) continue;
 
-        // Echo back so the user can see what they're typing in screen/minicom
-        if (c == '\r' || c == '\n') {
-            putchar('\r');
-            putchar('\n');
-        } else if (c == 0x7F || c == 0x08) {
-            // Backspace
-            if (pos > 0) {
-                pos--;
-                printf("\b \b");
-            }
-            stdio_flush();
-            continue;
-        } else {
-            putchar((char)c);
-        }
-        stdio_flush();
-
         if (c == '\r' || c == '\n') {
             line[pos] = 0;
-            if (pos > 0) handle_cmd(line);
+            if (strcmp(line, "loadbin") == 0) {
+                cmd_loadbin();
+                printf("Streaming data below...\n\n");
+            }
             pos = 0;
-            printf("ready> ");
-            stdio_flush();
         } else if (pos < (int)sizeof(line) - 1) {
             line[pos++] = (char)c;
+        } else {
+            // shift out oldest char to make room
+            memmove(line, line + 1, sizeof(line) - 2);
+            line[sizeof(line) - 2] = (char)c;
+            pos = sizeof(line) - 1;
         }
     }
 }

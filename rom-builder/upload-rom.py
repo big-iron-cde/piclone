@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-upload-rom.py — push a 32 KB ROM image to the Pico-as-ROM firmware.
+upload-rom.py — push a 32 KB ROM image to the Pico-as-ROM firmware (auto-run).
 
 Usage:
     python3 upload-rom.py [PORT] [BIN]
@@ -9,16 +9,16 @@ Defaults:
     PORT = /dev/ttyACM0
     BIN  = bin/rom.bin
 
-The firmware exposes a tiny binary upload protocol on its USB-CDC port:
+The auto-run firmware starts the clock, ROM, and reset automatically on
+USB connect. To upload a new ROM image, this script only needs to send:
 
     host → "loadbin\n"
     pico → "OK send 32768 bytes\n"
     host → <32768 raw bytes>
     pico → "loaded 32768 bytes\n"
 
-This script wraps that, plus optional ROM-emulator toggle and reset pulse
-so the CPU restarts on the new image. It tries to be polite — leaves the
-ROM emulator and CPU in whatever state you had them in before.
+The firmware asserts RESET during the upload so the CPU doesn't read
+half-written ROM data, then releases RESET automatically afterwards.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ ROM_SIZE = 0x8000  # 32 KB — must match firmware
 
 
 def read_until(ser: serial.Serial, needle: str, timeout: float = 3.0) -> str:
-    """Read lines from `ser` until one contains `needle` or we time out."""
+    """Read from `ser` until `needle` appears or we time out."""
     deadline = time.time() + timeout
     buf = ""
     while time.time() < deadline:
@@ -70,17 +70,7 @@ def upload(port: str, path: Path) -> None:
     time.sleep(0.3)
     ser.reset_input_buffer()
 
-    # Make sure the CPU isn't actively reading from the ROM region while we
-    # rewrite it — the firmware also disables `rom` internally, but flipping
-    # it explicitly + asserting reset is cleaner and stops the CPU.
-    print(">> assert RESET")
-    ser.write(b"r0\n")
-    time.sleep(0.05)
-    print(">> rom off")
-    ser.write(b"roms\n")
-    time.sleep(0.05)
-    ser.reset_input_buffer()
-
+    # The firmware auto-runs on boot. Just trigger the upload protocol.
     print(">> loadbin")
     ser.write(b"loadbin\n")
     read_until(ser, "OK send", timeout=3.0)
@@ -92,18 +82,6 @@ def upload(port: str, path: Path) -> None:
     read_until(ser, "loaded", timeout=10.0)
     dt = time.time() - t0
     print(f"   ({dt:.2f} s, {len(data) / dt / 1024:.1f} KB/s)")
-
-    print(">> rom on")
-    ser.write(b"rom\n")
-    time.sleep(0.05)
-    print(">> watch 4000")
-    ser.write(b"watch 4000\n")
-    time.sleep(0.05)
-    print(">> c100  (start 100 kHz clock — safe with flaky 3.3 V RAM)")
-    ser.write(b"c100\n")
-    time.sleep(0.05)
-    print(">> release RESET")
-    ser.write(b"r1\n")
 
     print("\n--- live output for 5 s (Ctrl-C to stop early) ---")
     try:
@@ -119,7 +97,6 @@ def upload(port: str, path: Path) -> None:
 
     ser.close()
     print("Done.  CPU is still running your new ROM image.")
-    print("Re-attach with:  screen /dev/ttyACM0 115200")
 
 
 def main() -> None:

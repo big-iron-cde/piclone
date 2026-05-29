@@ -1,7 +1,0 @@
-/home/student/Class/summer/pico-rom-test/build/_deps/picotool/picotool
-/home/student/Class/summer/pico-rom-test/build/_deps/picotool/picotoolTargets.cmake
-/home/student/Class/summer/pico-rom-test/build/_deps/picotool/picotoolTargets-release.cmake
-/home/student/Class/summer/pico-rom-test/build/_deps/picotool/picotoolConfig.cmake
-/home/student/Class/summer/pico-rom-test/build/_deps/picotool/picotoolConfigVersion.cmake
-/home/student/Class/summer/pico-rom-test/build/_deps/picotool/enc_bootloader.elf
-/home/student/Class/summer/pico-rom-test/build/_deps/picotool/enc_bootloader_mbedtls.elf
