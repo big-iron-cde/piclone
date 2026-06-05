@@ -37,19 +37,18 @@ def main():
 
     # ─── Program code, starting at CPU address $8000 ─────────────────────
     #
-    # CLC                    ; clear carry so ADC is predictable
+    # CLC                    ; clear carry
     # LDA #$05               ; A = 5
-    # STA $4000              ; write 5 to $4000 (Pico watch port — avoid $5000;
-    #                        ;   high byte $50 couples onto the data bus)
-    # ADC #$03               ; A = 5 + 3 + 0 = 8
-    # STA $4000              ; write 8 to $4000
+    # STA $4000              ; write 5 to $4000
+    # ADC #$0F               ; A = 5 + 15 + 0 = 20
+    # STA $4000              ; write 20 to $4000
     # JMP $8000              ; loop back to the top
     #
     pc = 0x8000
     pc = write_bytes(rom, pc, 0x18)               # CLC
     pc = write_bytes(rom, pc, 0xA9, 0x05)         # LDA #$05
     pc = write_bytes(rom, pc, 0x8D, 0x00, 0x40)   # STA $4000
-    pc = write_bytes(rom, pc, 0x69, 0x10)         # ADC #$03
+    pc = write_bytes(rom, pc, 0x69, 0x0F)         # ADC #$0F
     pc = write_bytes(rom, pc, 0x8D, 0x00, 0x40)   # STA $4000
     pc = write_bytes(rom, pc, 0x4C, 0x00, 0x80)   # JMP $8000
 

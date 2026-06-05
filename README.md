@@ -69,6 +69,7 @@ No external address decoder needed. A15 itself does all the decoding.
 | 31 | GP26 | A15 in (chip enable) | 65C02 pin 25, RAM pin 20 |
 | 32 | GP27 | RESET drive (open-drain emulated) | 65C02 pin 40 (RESB) |
 | 34 | GP28 | PHI2 clock out (PWM, up to 1 MHz) | 65C02 pin 37 (PHI2) |
+| 36 | GP23 | RWB in (read/write bar) | 65C02 pin 34 (RWB) |
 
 **Power (recommended — split supply):**
 - **Pico:** powered from **USB only** while developing. Do **not** connect external 3.3 V to Pico pin 39 (VSYS) or pin 36 (3V3 OUT) when USB is plugged in — USB back-feeds ~4.5 V on VSYS and fights the breadboard rail, which stalls the CPU.
@@ -79,8 +80,9 @@ No external address decoder needed. A15 itself does all the decoding.
 
 **Notes on the special GPIOs:**
 - **GP26 (A15)**: also goes to the RAM's CE# pin. When A15 = 1 (ROM region), RAM is deselected and Pico drives data. When A15 = 0 (RAM region), Pico stays Hi-Z and RAM drives data. Same wire, both purposes.
+- **GP23 (RWB)**: connected to 65C02 pin 34 (RWB). The Pico reads this to distinguish CPU read cycles (RWB high → `0`) from write cycles (RWB low → `1`) in the bus monitor.
 - **GP27 (RESET)**: configured as INPUT to release reset, OUTPUT LOW to assert reset. With a 10 kΩ pull-up on the RESB line, INPUT = line floats high = CPU runs. OUTPUT LOW = line forced low = CPU held in reset.
-- **GP28 (PHI2)**: PWM output, 50 % duty. Replaces the oscillator can. Start at **100 kHz** (`c100`) for bring-up; increase to 500 kHz–1 MHz once stable.
+- **GP28 (PHI2)**: fixed clock output at **0.2 Hz** (5 seconds per cycle) for step-by-step learning. Can be changed in firmware if faster speeds are needed.
 
 ---
 
@@ -250,8 +252,9 @@ Common GND ───────┬─→ Pico pins 3, 8, 13, 18, 23, 28, 33, 38
 | From | To | Purpose |
 |---|---|---|
 | 65C02 pin 34 (RWB) | RAM pin 27 (WE#) | Write enable to RAM |
+| 65C02 pin 34 (RWB) | Pico pin 36 (GP23) | Bus monitor read/write detection |
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
-| Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock (start 100 kHz, up to 1 MHz) |
+| Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Fixed clock at 0.2 Hz (5s per cycle) |
 
 ### Pull-up resistors (6 × 10 kΩ, all top to +3.3 V)
 
@@ -263,6 +266,8 @@ Common GND ───────┬─→ Pico pins 3, 8, 13, 18, 23, 28, 33, 38
 | R4 | 65C02 pin 36 (BE) | Bus always enabled |
 | R5 | 65C02 pin 40 (RESB) | High when Pico isn't asserting reset |
 | R6 | 65C02 pin 38 (SOB) | Inactive (high) when unused — optional but cheap insurance |
+
+### Speed dial (potentiometer)
 
 ### Power and ground (separate from the bus table)
 
@@ -292,8 +297,8 @@ Working code lives in **`pico-rom-test/`** (Pico firmware) and **`rom-builder/`*
 2. **Generate PHI2** — GP28 as PWM square wave at **100 kHz** on boot (safe starting speed).
 3. **Reset control** — GP27 starts as OUTPUT LOW, then releases to INPUT (pull-up runs CPU) once USB is connected.
 4. **ROM emulation** — 32 KB `rom_image[]` in SRAM, mapped to CPU $8000–$FFFF. When A15 = 1, drive GP15–GP22 from `rom_image[addr & 0x7FFF]`; when A15 = 0, data bus Hi-Z. Implemented with **GPIO polling** (works reliably at 100 kHz–1 MHz on this build; PIO+DMA is a future upgrade).
-5. **Built-in demo program** — the firmware ships with a tiny demo at $8000 that writes `$05` then `$08` to `$4000` each loop. Open any serial monitor and the data appears immediately.
-6. **Bus watch (print port)** — the firmware automatically watches `$4000` and prints data bytes over USB-CDC. It filters spurious samples where data equals the address high byte (breadboard crosstalk).
+5. **Built-in demo program** — the firmware ships with a tiny demo at $8000 that writes `$05` then `$14` (20 decimal) to `$4000` each loop. Open any serial monitor and the data appears immediately.
+6. **Full bus monitor** — on every PHI2 rising edge the Pico captures the full 16-bit address, 8-bit data, and RWB pin, then prints a boxed table over USB-CDC. The `NO` column is a sequential instruction counter (01–99) that resets on CPU reset. The `RW` field is `0` for read, `1` for write. The `CLOCK` field shows the fixed PHI2 frequency (0.2 Hz).
 7. **ROM upload** — send `loadbin` followed by 32 KB raw bytes to replace the image. RESET is asserted during the upload so the CPU doesn't read half-written data.
 
 Flash **`pico-rom-test/build/pico-rom-test.uf2`** to the Pico (BOOTSEL + drag, or `picotool load`).
@@ -312,9 +317,24 @@ python3 upload-rom.py         # sends loadbin → 32 KB raw bytes
 Expected output in your serial monitor immediately after plugging in the Pico:
 
 ```
-[$4000 = $05]
-[$4000 = $08]
-[$4000 = $05]
++----+------+---------+----+-------+
+| NO | DATA | ADDRESS | RW | CLOCK |
++----+------+---------+----+-------+
+| 01 |  18  |  8000   |  0 |  0.2  |
+| 02 |  A9  |  8001   |  0 |  0.2  |
+| 03 |  05  |  8002   |  0 |  0.2  |
+| 04 |  8D  |  8003   |  0 |  0.2  |
+| 05 |  00  |  8004   |  0 |  0.2  |
+| 06 |  40  |  8005   |  0 |  0.2  |
+| 07 |  69  |  8006   |  0 |  0.2  |
+| 08 |  0F  |  8007   |  0 |  0.2  |
+| 09 |  8D  |  8008   |  0 |  0.2  |
+| 10 |  00  |  8009   |  0 |  0.2  |
+| 11 |  40  |  800A   |  0 |  0.2  |
+| 12 |  4C  |  800B   |  0 |  0.2  |
+| 13 |  00  |  800C   |  0 |  0.2  |
+| 14 |  80  |  800D   |  0 |  0.2  |
+| 01 |  18  |  8000   |  0 |  0.2  |  <- counter resets after JMP
 ...
 ```
 
@@ -325,9 +345,9 @@ Expected output in your serial monitor immediately after plugging in the Pico:
 ```
 $8000: CLC
        LDA #$05
-       STA $4000       ; Pico watch port
-       ADC #$03        ; A = 8
-       STA $4000
+       STA $4000       ; visible on bus monitor
+       ADC #$0F        ; A = 20
+       STA $4000       ; visible on bus monitor
        JMP $8000
 $FFFC: $8000           ; reset vector
 ```
@@ -352,14 +372,15 @@ $FFFC: $8000           ; reset vector
 2. **Open serial monitor** — `python3 upload-rom.py` handles upload and live output; or any serial monitor at 115200 baud (e.g. `picocom /dev/ttyACM0 -b 115200`). The Pico auto-runs on USB connect — data appears immediately without typing any commands.
 3. **Dumb-ROM test** (no upload needed after fresh boot):
    - Plug in USB — the built-in demo starts automatically.
-   - You should see `[$4000 = $05]` / `[$4000 = $08]` alternating in the serial monitor.
+   - You should see the boxed header followed by lines like `| 01 | 18 | 8000 | 0 | 0.2 |` in the serial monitor.
+   - Each instruction takes 5 seconds — perfect for step-by-step learning.
 4. **Full program test:**
    ```bash
    cd rom-builder
    python3 build-rom.py
    python3 upload-rom.py
    ```
-   Expect the same watch output with your custom program.
+   Expect the same bus monitor output with your custom program.
 5. **RAM test (optional):** program that `STA`s then `LDA`s from `$0200`. HM62256 at 3.3 V may still be flaky — if reads fail, the built-in demo (which only writes to RAM) still works fine.
 
 ---
