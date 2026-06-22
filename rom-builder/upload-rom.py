@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-upload-rom.py — push a 32 KB ROM image to the Pico-as-ROM firmware (auto-run).
+upload-rom.py — push a 32 KB ROM image via the Hardware API.
 
 Usage:
     python3 upload-rom.py [PORT] [BIN]
@@ -9,55 +9,25 @@ Defaults:
     PORT = /dev/ttyACM0
     BIN  = bin/rom.bin
 
-The auto-run firmware starts the clock, ROM, and reset automatically on
-USB connect. To upload a new ROM image, this script only needs to send:
+Protocol (framed serial):
+    ENQ → STX → ACK → JSON/binary payload → EOT → ACK/NACK
 
-    host → "loadbin\n"
-    pico → "OK send 32768 bytes\n"
-    host → <32768 raw bytes>
-    pico → "loaded 32768 bytes\n"
-
-The firmware asserts RESET during the upload so the CPU doesn't read
-half-written ROM data, then releases RESET automatically afterwards.
+Steps:
+    1. {"cmd":"upload_rom","size":32768}
+    2. binary frame with 32768 raw bytes
+    3. optional read-until-STP capture
 """
 
 from __future__ import annotations
 
+import json
 import sys
-import time
 from pathlib import Path
 
-try:
-    import serial
-except ImportError:
-    sys.stderr.write(
-        "ERROR: pyserial is required.  Install with:\n"
-        "    pip install --user pyserial\n"
-    )
-    sys.exit(1)
+from hardware_api import HardwareAPI, ROM_SIZE
 
 
-ROM_SIZE = 0x8000  # 32 KB — must match firmware
-
-
-def read_until(ser: serial.Serial, needle: str, timeout: float = 3.0) -> str:
-    """Read from `ser` until `needle` appears or we time out."""
-    deadline = time.time() + timeout
-    buf = ""
-    while time.time() < deadline:
-        chunk = ser.read(256).decode(errors="replace")
-        if chunk:
-            buf += chunk
-            for line in chunk.splitlines():
-                line = line.strip()
-                if line:
-                    print(f"  << {line}")
-            if needle in buf:
-                return buf
-    raise TimeoutError(f"never saw {needle!r} in {buf!r}")
-
-
-def upload(port: str, path: Path) -> None:
+def upload(port: str, path: Path, read_stp: bool = False) -> None:
     data = path.read_bytes()
     if len(data) != ROM_SIZE:
         sys.exit(
@@ -66,44 +36,32 @@ def upload(port: str, path: Path) -> None:
         )
 
     print(f"Opening {port} ...")
-    ser = serial.Serial(port, 115200, timeout=0.2)
-    time.sleep(0.3)
-    ser.reset_input_buffer()
+    with HardwareAPI(port) as api:
+        print(">> upload_rom")
+        result = api.upload_rom_json(data)
+        print(json.dumps(result, indent=2))
 
-    # The firmware auto-runs on boot. Just trigger the upload protocol.
-    print(">> loadbin")
-    ser.write(b"loadbin\n")
-    read_until(ser, "OK send", timeout=3.0)
+        if read_stp:
+            print("\n>> read until STP")
+            capture = api.read_until_stp(max_cycles=500)
+            print(f"   reason={capture.reason}  cycles={len(capture.cycles)}")
+            for cyc in capture.cycles[:20]:
+                print(f"   {cyc.seq:3d}  {cyc.addr}  {cyc.data}  rw={cyc.rw}")
+            if len(capture.cycles) > 20:
+                print(f"   ... {len(capture.cycles) - 20} more")
 
-    print(f">> sending {len(data)} bytes ...")
-    t0 = time.time()
-    ser.write(data)
-    ser.flush()
-    read_until(ser, "loaded", timeout=10.0)
-    dt = time.time() - t0
-    print(f"   ({dt:.2f} s, {len(data) / dt / 1024:.1f} KB/s)")
-
-    print("\n--- live output for 5 s (Ctrl-C to stop early) ---")
-    try:
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            chunk = ser.read(256).decode(errors="replace")
-            if chunk:
-                sys.stdout.write(chunk)
-                sys.stdout.flush()
-    except KeyboardInterrupt:
-        pass
-    print("\n--- end of capture ---")
-
-    ser.close()
-    print("Done.  CPU is still running your new ROM image.")
+    print("\nDone.")
 
 
 def main() -> None:
     args = sys.argv[1:]
+    read_stp = "--read-stp" in args
+    if read_stp:
+        args.remove("--read-stp")
+
     port = args[0] if len(args) >= 1 else "/dev/ttyACM0"
     binp = Path(args[1]) if len(args) >= 2 else Path(__file__).parent / "bin" / "rom.bin"
-    upload(port, binp)
+    upload(port, binp, read_stp=read_stp)
 
 
 if __name__ == "__main__":

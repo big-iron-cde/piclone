@@ -16,6 +16,8 @@ pico_sdk_init()
 
 add_executable(pico-rom-test
     main.c
+    protocol.c
+    hardware_api.c
 )
 
 target_link_libraries(pico-rom-test

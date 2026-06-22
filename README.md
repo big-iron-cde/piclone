@@ -188,7 +188,7 @@ No external address decoder needed. A15 itself does all the decoding.
 
 **Why OE# = +3.3 V (not GND):** OE# is active-low. Tied high, the RAM never drives the data bus — only accepts writes. This avoids bus contention during CPU stores (confirmed necessary on this breadboard build). Reads from RAM return floating garbage, which is fine for ROM-only test programs that only write to RAM.
 
-**Virtual print port:** the demo program stores results at **$4000** so the Pico `watch` command can snoop CPU writes over USB. Avoid addresses whose high byte matches common data values on a noisy breadboard (e.g. `$5000` often reads back as `$50` due to address-line crosstalk onto D0–D7).
+**Virtual print port:** the demo program stores results at **$4000**. Use the Hardware API `read` or `monitor` commands to observe CPU stores over USB. Avoid addresses whose high byte matches common data values on a noisy breadboard (e.g. `$5000` often reads back as `$50` due to address-line crosstalk onto D0–D7).
 
 ---
 
@@ -269,6 +269,8 @@ Common GND ───────┬─→ Pico pins 3, 8, 13, 18, 23, 28, 33, 38
 
 ### Speed dial (potentiometer)
 
+*(not used in this build)*
+
 ### Power and ground (separate from the bus table)
 
 | From | To |
@@ -293,61 +295,149 @@ Working code lives in **`pico-rom-test/`** (Pico firmware) and **`rom-builder/`*
 
 ### What the Pico firmware does (auto-run)
 
-1. **Auto-start on USB connect** — clock, ROM emulation, and RESET release happen automatically. No commands needed.
-2. **Generate PHI2** — GP28 as PWM square wave at **100 kHz** on boot (safe starting speed).
+1. **Auto-start on USB connect** — clock, ROM emulation, and RESET release happen automatically. No commands needed for the CPU to run.
+2. **Generate PHI2** — GP28 square wave at **0.2 Hz** (5 s per cycle) for step-by-step learning. Can be changed in firmware for faster speeds.
 3. **Reset control** — GP27 starts as OUTPUT LOW, then releases to INPUT (pull-up runs CPU) once USB is connected.
 4. **ROM emulation** — 32 KB `rom_image[]` in SRAM, mapped to CPU $8000–$FFFF. When A15 = 1, drive GP15–GP22 from `rom_image[addr & 0x7FFF]`; when A15 = 0, data bus Hi-Z. Implemented with **GPIO polling** (works reliably at 100 kHz–1 MHz on this build; PIO+DMA is a future upgrade).
-5. **Built-in demo program** — the firmware ships with a tiny demo at $8000 that writes `$05` then `$14` (20 decimal) to `$4000` each loop. Open any serial monitor and the data appears immediately.
-6. **Full bus monitor** — on every PHI2 rising edge the Pico captures the full 16-bit address, 8-bit data, and RWB pin, then prints a boxed table over USB-CDC. The `NO` column is a sequential instruction counter (01–99) that resets on CPU reset. The `RW` field is `0` for read, `1` for write. The `CLOCK` field shows the fixed PHI2 frequency (0.2 Hz).
-7. **ROM upload** — send `loadbin` followed by 32 KB raw bytes to replace the image. RESET is asserted during the upload so the CPU doesn't read half-written data.
+5. **Built-in demo program** — ships with a tiny loop at $8000 that writes `$05` then `$14` (20 decimal) to `$4000`.
+6. **Hardware API** — structured host control over USB-CDC serial (see below). Replaces the old text `loadbin` command.
 
 Flash **`pico-rom-test/build/pico-rom-test.uf2`** to the Pico (BOOTSEL + drag, or `picotool load`).
 
-### Host-side workflow
+Build firmware:
 
 ```bash
-# 1. Build a 32 KB ROM image (program at CPU $8000, vectors at $FFFC)
-cd rom-builder
-python3 build-rom.py          # → bin/rom.bin
-
-# 2. Upload to Pico and start the CPU
-python3 upload-rom.py         # sends loadbin → 32 KB raw bytes
+cd pico-rom-test
+mkdir -p build && cd build
+cmake ..
+make
 ```
 
-Expected output in your serial monitor immediately after plugging in the Pico:
+---
+
+### Hardware API
+
+The host talks to the Pico over USB-CDC at **115200 baud** using a framed serial protocol. Payloads are JSON (except ROM binary upload). This is designed for scripted bring-up and CI.
+
+#### Framing
+
+Every transaction follows the same byte sequence:
+
+```
+Sender                         Receiver
+  ENQ (0x05)          ────────►
+  STX (0x02)          ────────►
+                      ◄────────  ACK (0x06)
+  payload bytes       ────────►
+  EOT (0x04)          ────────►
+                      ◄────────  ACK (0x06) or NACK (0x15)
+```
+
+| Byte | Value | Meaning |
+|------|-------|---------|
+| ENQ  | `0x05` | Start frame |
+| STX  | `0x02` | Start payload |
+| ACK  | `0x06` | Ready / accepted |
+| EOT  | `0x04` | End payload |
+| NACK | `0x15` | Rejected |
+
+**Important:** do not open a plain serial monitor on `/dev/ttyACM0` while using the Hardware API — unstructured output will corrupt framing. Only one process may hold the port at a time.
+
+#### Commands
+
+All commands are JSON sent in a framed payload (host → Pico). The Pico responds with a framed JSON payload (Pico → host).
+
+| Command | Request | Response |
+|---------|---------|----------|
+| **reset** | `{"cmd":"reset","assert":true}` or `"assert":false` | `{"ok":true,"cmd":"reset","asserted":true}` |
+| **upload_rom** | `{"cmd":"upload_rom","size":32768}` then a **second binary frame** (32768 raw bytes) | `{"ok":true,"cmd":"upload_rom","bytes":32768,"reset_vector":"8000"}` |
+| **read** | `{"cmd":"read","until":"stp","max_cycles":10000}` | Streams `{"type":"cycle",...}` frames, then `{"type":"done","reason":"stp",...}` |
+| **request_addr** | `{"cmd":"request_addr"}` | `{"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":0.2}` |
+| **monitor** | `{"cmd":"monitor","enable":true}` | Enables/disables ASCII bus table on USB (off by default) |
+
+**reset** — Assert or release the 6502 RESET line (GP27). Use `"assert":true` to hold the CPU in reset, `"assert":false` to let it run.
+
+**upload_rom** — Two-step transfer:
+1. Send the JSON command frame; Pico replies `{"ok":true,"awaiting":32768}`.
+2. Send a binary frame containing exactly 32768 bytes.
+
+RESET is asserted for the duration of the upload so the CPU cannot fetch half-written ROM data, then released automatically.
+
+**read** — Captures bus activity as JSON. Streams one frame per PHI2 rising edge until:
+- the CPU **fetches STP** (`0xDB` on a read cycle), or
+- `max_cycles` is reached.
+
+Each cycle frame looks like:
+
+```json
+{"type":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
+```
+
+Final frame:
+
+```json
+{"type":"done","ok":true,"reason":"stp","cycles":14,"addr":"800D"}
+```
+
+To use this in automated tests, end your ROM with a `STP` instruction.
+
+**request_addr** — Returns the last address sampled on the bus (updated every PHI2 rising edge).
+
+**monitor** — Toggles the human-readable ASCII bus table (disabled by default so it does not interfere with framed protocol traffic):
 
 ```
 +----+------+---------+----+-------+
 | NO | DATA | ADDRESS | RW | CLOCK |
 +----+------+---------+----+-------+
 | 01 |  18  |  8000   |  0 |  0.2  |
-| 02 |  A9  |  8001   |  0 |  0.2  |
-| 03 |  05  |  8002   |  0 |  0.2  |
-| 04 |  8D  |  8003   |  0 |  0.2  |
-| 05 |  00  |  8004   |  0 |  0.2  |
-| 06 |  40  |  8005   |  0 |  0.2  |
-| 07 |  69  |  8006   |  0 |  0.2  |
-| 08 |  0F  |  8007   |  0 |  0.2  |
-| 09 |  8D  |  8008   |  0 |  0.2  |
-| 10 |  00  |  8009   |  0 |  0.2  |
-| 11 |  40  |  800A   |  0 |  0.2  |
-| 12 |  4C  |  800B   |  0 |  0.2  |
-| 13 |  00  |  800C   |  0 |  0.2  |
-| 14 |  80  |  800D   |  0 |  0.2  |
-| 01 |  18  |  8000   |  0 |  0.2  |  <- counter resets after JMP
-...
 ```
 
-**Note:** `rom_image[]` is lost on Pico power cycle — re-run `upload-rom.py` after each reboot. Only one program can hold `/dev/ttyACM0` at a time; close your serial monitor before uploading.
+---
 
-### Demo program (in `build-rom.py`)
+### Host-side workflow
+
+Install the Python dependency once:
+
+```bash
+pip install --user pyserial
+```
+
+Build and upload a ROM:
+
+```bash
+cd rom-builder
+python3 main.py                          # → bin/rom.bin
+python3 upload-rom.py                    # upload via Hardware API
+python3 upload-rom.py --read-stp         # upload, then capture bus until STP
+```
+
+Use the API from Python (for CI or custom scripts):
+
+```python
+from hardware_api import HardwareAPI
+
+with HardwareAPI("/dev/ttyACM0") as api:
+    print(api.request_addr())
+    api.reset(assert_reset=True)         # hold CPU in reset
+    api.reset(assert_reset=False)        # release
+    result = api.upload_rom_json(open("bin/rom.bin", "rb").read())
+    capture = api.read_until_stp(max_cycles=500)
+    print(capture.reason, len(capture.cycles))
+    api.monitor(enable=True)             # optional ASCII bus table
+```
+
+**Note:** `rom_image[]` is lost on Pico power cycle — re-run `upload-rom.py` after each reboot.
+
+---
+
+### Demo program (in `rom-builder/main.py`)
 
 ```
 $8000: CLC
        LDA #$05
-       STA $4000       ; visible on bus monitor
+       STA $4000       ; visible via read / monitor
        ADC #$0F        ; A = 20
-       STA $4000       ; visible on bus monitor
+       STA $4000
        JMP $8000
 $FFFC: $8000           ; reset vector
 ```
@@ -369,18 +459,27 @@ $FFFC: $8000           ; reset vector
 ## 9. Bring-up sequence
 
 1. **Wire per §6**, flash **`pico-rom-test.uf2`**, connect USB (Pico) + external 3.3 V (breadboard), common GND.
-2. **Open serial monitor** — `python3 upload-rom.py` handles upload and live output; or any serial monitor at 115200 baud (e.g. `picocom /dev/ttyACM0 -b 115200`). The Pico auto-runs on USB connect — data appears immediately without typing any commands.
+2. **Install host tools** — `pip install --user pyserial`.
 3. **Dumb-ROM test** (no upload needed after fresh boot):
-   - Plug in USB — the built-in demo starts automatically.
-   - You should see the boxed header followed by lines like `| 01 | 18 | 8000 | 0 | 0.2 |` in the serial monitor.
-   - Each instruction takes 5 seconds — perfect for step-by-step learning.
+   - Plug in USB — the built-in demo starts automatically; the CPU runs at 0.2 Hz (5 s per instruction).
+   - Use the Hardware API to observe activity:
+     ```bash
+     cd rom-builder
+     python3 -c "
+     from hardware_api import HardwareAPI
+     with HardwareAPI() as api:
+         api.monitor(enable=True)
+         input('Press Enter to stop...')
+     "
+     ```
+   - Or capture structured bus data: `python3 upload-rom.py --read-stp` (after building a ROM that ends in `STP`).
 4. **Full program test:**
    ```bash
    cd rom-builder
-   python3 build-rom.py
+   python3 main.py
    python3 upload-rom.py
+   python3 upload-rom.py --read-stp
    ```
-   Expect the same bus monitor output with your custom program.
 5. **RAM test (optional):** program that `STA`s then `LDA`s from `$0200`. HM62256 at 3.3 V may still be flaky — if reads fail, the built-in demo (which only writes to RAM) still works fine.
 
 ---
@@ -394,11 +493,12 @@ $FFFC: $8000           ; reset vector
 | Address bus changes but stuck at $FFFE forever | CPU in reset (RESB low — check R5 + Pico GP27 should be INPUT after boot) |
 | Address goes $FFFC, $FFFD, then random garbage | D0–D7 / address lines mis-wired, or ROM image wasn't uploaded correctly |
 | Reset vector fetches correct bytes but jumps to wrong address | Endianness — reset vector low byte at $FFFC, high byte at $FFFD |
-| Watch shows `$50` at `$5000` or `$40` at `$4000` | Address-line crosstalk onto data bus — the built-in watch at `$4000` filters high-byte matches |
-| Watch shows `$05` but never `$08`, or CPU crashes quickly | RAM OE# still on GND — move to +3.3 V |
+| Watch shows `$50` at `$5000` or `$40` at `$4000` | Address-line crosstalk onto data bus — use `$4000` as the virtual print port |
+| Watch shows `$05` but never `$14`, or CPU crashes quickly | RAM OE# still on GND — move to +3.3 V |
 | RAM reads return garbage (writes seem to work) | HM62256 at 3.3 V out of spec — replace with 3.3 V SRAM for production |
 | Random behavior when touching breadboard | Loose wire or missing decoupling — re-seat connections; 100 nF cap helps |
-| `upload-rom.py`: Device or resource busy | Serial monitor or another program holds `/dev/ttyACM0` — close it first |
+| `upload-rom.py`: Device or resource busy | Another program holds `/dev/ttyACM0` — close serial monitors first |
+| `upload-rom.py`: ProtocolError / timeout | Firmware not flashed or wrong port; ensure no plain serial monitor is open |
 | Pico USB disconnects when 65C02 boots | Brownout — 3.3 V supply can't deliver enough current |
 
 ---
@@ -407,14 +507,16 @@ $FFFC: $8000           ; reset vector
 
 **Can:**
 - Run the 65C02 from a Pico-hosted 32 KB ROM image ($8000–$FFFF)
-- Build ROM on a laptop (`build-rom.py`), upload over USB (`upload-rom.py` / `loadbin`)
-- Auto-start clock, ROM, and reset on USB connect — no manual commands needed
-- Snoop a virtual print port ($4000) — see CPU stores over USB immediately
+- Build ROM on a laptop (`rom-builder/main.py`), upload over USB via the Hardware API (`upload-rom.py`, `hardware_api.py`)
+- Auto-start clock, ROM, and reset on USB connect — no manual commands needed for the CPU to run
+- Control reset, upload ROM, capture bus cycles (until STP), and query address over framed JSON serial
+- Optional ASCII bus monitor (`monitor` command) or structured JSON capture (`read` command)
+- Snoop a virtual print port ($4000) — see CPU stores via `read` or `monitor`
 - Read and write RAM (subject to HM62256 + 3.3 V behavior)
 
 **Cannot (deliberately deferred for the prototype):**
 - Fail-safe behavior when Pico is unpowered — line state of RESB is governed only by the pull-up, which is correct, but the data bus could be back-powered through Pico GPIO protection diodes. Don't leave a powered 65C02 connected to an unpowered Pico for long.
-- Tri-state the CPU mid-program for hot-swap ROM updates — BE is permanently held high. To update the ROM you must trigger `loadbin`, which asserts RESET automatically.
+- Tri-state the CPU mid-program for hot-swap ROM updates — BE is permanently held high. To update the ROM you must use `upload_rom`, which asserts RESET automatically.
 - Robust noise immunity — no decoupling caps.
 - Guaranteed RAM reliability — HM62256 is out of spec at 3.3 V.
 
@@ -422,4 +524,4 @@ All four of those are fixable with parts you don't have right now (MOSFETs, bypa
 
 ---
 
-*Last updated: 2026-05-23. Verified on breadboard with Pico 2, W65C02S, HM62256LP (OE# → 3.3 V), split USB + external 3.3 V power.*
+*Last updated: 2026-06-22. Verified on breadboard with Pico 2, W65C02S, HM62256LP (OE# → 3.3 V), split USB + external 3.3 V power.*

@@ -1,21 +1,17 @@
 /*
  * pico-rom-test — Pico-as-ROM firmware for the breadboard 6502 prototype
  *
- * Auto-run variant: no interactive command interface. On USB connect the
- * firmware immediately starts the 65C02 clock, enables ROM emulation,
- * releases RESET, and streams watch-port data over USB-CDC.
+ * Hardware API over USB-CDC (framed serial):
+ *   ENQ → STX → ACK → JSON payload → EOT → ACK/NACK
  *
- * Connect over USB serial at any baud and the data appears immediately.
+ * Commands: reset, upload_rom, read (until STP), request_addr, monitor
  *
- * To upload a custom 32 KB ROM image, send the line "loadbin" followed
- * by 32768 raw bytes. The built-in demo program (stores $05 / $08 at
- * $4000) runs out of the box if no upload is performed.
+ * On USB connect the firmware auto-starts clock, ROM emulation, and RESET.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
@@ -23,38 +19,37 @@
 #include "hardware/sync.h"
 #include "hardware/clocks.h"
 
-// ─── Pin map (matches pico-as-rom-wiring.md) ─────────────────────────────
+#include "protocol.h"
+#include "hardware_api.h"
 
-#define PIN_A_FIRST   0    // GP0..GP14 = A0..A14 (15 pins)
+// ─── Pin map (matches README §2) ────────────────────────────────────────
+
+#define PIN_A_FIRST   0
 #define PIN_A_LAST    14
-#define PIN_D_FIRST   15   // GP15..GP22 = D0..D7 (8 pins)
+#define PIN_D_FIRST   15
 #define PIN_D_LAST    22
-#define PIN_A15       26   // GP26 = A15 (used as Pico's chip-enable)
-#define PIN_RESET     27   // GP27 = RESET drive (open-drain emulated)
-#define PIN_PHI2      28   // GP28 = PHI2 clock output
-#define PIN_RWB       23   // GP23 = RWB input (read/write detection)
+#define PIN_A15       26
+#define PIN_RESET     27
+#define PIN_PHI2      28
+#define PIN_RWB       23
 
 #define DATA_MASK     (0xFFu << PIN_D_FIRST)
-#define ADDR_LOW_MASK (0x7FFFu << PIN_A_FIRST)
 
-#define ROM_SIZE      0x8000   // 32 KB — fits CPU $8000-$FFFF
+#define ROM_SIZE      0x8000
 
 // ─── State ───────────────────────────────────────────────────────────────
 
 static uint8_t rom_image[ROM_SIZE];
+static bool rom_active = false;
 
-static bool monitor_addr = false;
-static bool rom_active   = false;
-
-static bool     phi2_last_state = false;
+static bool     phi2_last_state  = false;
 static bool     reset_last_state = true;
-static float    current_hz      = 0.2f;
-static uint16_t seq_counter     = 1;
+static float    current_hz       = 0.2f;
+static uint16_t seq_counter      = 1;
 
 // ─── Pin setup ───────────────────────────────────────────────────────────
 
 static void pins_init(void) {
-    // Address bus + A15 + reset start as inputs (safe — won't fight bus)
     for (int p = PIN_A_FIRST; p <= PIN_A_LAST; p++) {
         gpio_init(p);
         gpio_set_dir(p, GPIO_IN);
@@ -66,23 +61,19 @@ static void pins_init(void) {
     gpio_init(PIN_A15);
     gpio_set_dir(PIN_A15, GPIO_IN);
 
-    // RESET starts asserted (output LOW = CPU held in reset)
     gpio_init(PIN_RESET);
     gpio_set_dir(PIN_RESET, GPIO_OUT);
     gpio_put(PIN_RESET, 0);
 
-    // PHI2 starts as GPIO output, held low
     gpio_init(PIN_PHI2);
     gpio_set_dir(PIN_PHI2, GPIO_OUT);
     gpio_put(PIN_PHI2, 0);
 
-    // RWB (read/write bar) — input to detect CPU read vs write
     gpio_init(PIN_RWB);
     gpio_set_dir(PIN_RWB, GPIO_IN);
 }
 
 // ─── PHI2 (clock) ────────────────────────────────────────────────────────
-// Timer-alarm based square wave.  Works from 1 Hz up to ~100 kHz.
 
 static alarm_id_t phi2_alarm_id = 0;
 static uint32_t   phi2_half_us  = 0;
@@ -91,17 +82,16 @@ static int64_t phi2_alarm_callback(alarm_id_t id, void *user_data) {
     (void)id;
     (void)user_data;
     gpio_xor_mask(1u << PIN_PHI2);
-    return (int64_t)phi2_half_us;   // reschedule in half_period_us
+    return (int64_t)phi2_half_us;
 }
 
 static void phi2_start_us(uint32_t half_period_us) {
-    // Ensure pin is under SIO control
     gpio_set_function(PIN_PHI2, GPIO_FUNC_SIO);
     gpio_set_dir(PIN_PHI2, GPIO_OUT);
     gpio_put(PIN_PHI2, 0);
 
     phi2_half_us = half_period_us;
-    if (phi2_half_us < 2) phi2_half_us = 2;   // ~250 kHz ceiling
+    if (phi2_half_us < 2) phi2_half_us = 2;
 
     phi2_alarm_id = add_alarm_in_us(phi2_half_us, phi2_alarm_callback, NULL, true);
 
@@ -110,40 +100,15 @@ static void phi2_start_us(uint32_t half_period_us) {
            hz, (unsigned long)phi2_half_us);
 }
 
-static void phi2_stop(void) {
-    if (phi2_alarm_id) {
-        cancel_alarm(phi2_alarm_id);
-        phi2_alarm_id = 0;
-    }
-    gpio_put(PIN_PHI2, 0);
-    printf("PHI2 off (held low)\n");
-}
-
 // ─── Reset ───────────────────────────────────────────────────────────────
 
 static void reset_assert(void) {
     gpio_set_dir(PIN_RESET, GPIO_OUT);
     gpio_put(PIN_RESET, 0);
-    printf("RESET asserted (CPU held in reset)\n");
 }
 
 static void reset_release(void) {
     gpio_set_dir(PIN_RESET, GPIO_IN);
-    printf("RESET released (CPU should run)\n");
-}
-
-// ─── Address bus sampling ───────────────────────────────────────────────
-
-static uint16_t addr_read(void) {
-    uint32_t pins = gpio_get_all();
-    uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
-    if (pins & (1u << PIN_A15)) addr |= 0x8000u;
-    return addr;
-}
-
-static uint8_t data_read(void) {
-    uint32_t pins = gpio_get_all();
-    return (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
 }
 
 // ─── ROM image ──────────────────────────────────────────────────────────
@@ -151,14 +116,6 @@ static uint8_t data_read(void) {
 static void rom_image_init(void) {
     memset(rom_image, 0xEA, sizeof(rom_image));
 
-    // ── Built-in demo program at CPU $8000 ─────────────────────────────
-    // CLC
-    // LDA #$05
-    // STA $4000
-    // ADC #$0F           ; A = 20
-    // STA $4000
-    // JMP $8000
-    // --------------------------------------------------------------------
     rom_image[0x0000] = 0x18;       // CLC
     rom_image[0x0001] = 0xA9;       // LDA #$05
     rom_image[0x0002] = 0x05;
@@ -174,10 +131,8 @@ static void rom_image_init(void) {
     rom_image[0x000C] = 0x00;
     rom_image[0x000D] = 0x80;
 
-    // Default reset vector: $FFFC/$FFFD → $8000
     rom_image[0x7FFC] = 0x00;
     rom_image[0x7FFD] = 0x80;
-    // Default IRQ/BRK vector: $FFFE/$FFFF → $8000
     rom_image[0x7FFE] = 0x00;
     rom_image[0x7FFF] = 0x80;
 }
@@ -189,7 +144,6 @@ static void rom_task(void) {
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
     bool     a15  = (pins >> PIN_A15) & 1u;
 
-    // ROM emulation
     if (rom_active) {
         if (a15) {
             uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
@@ -201,79 +155,42 @@ static void rom_task(void) {
         }
     }
 
-    // Full bus monitor — sample on PHI2 rising edge
     if (phi2 && !phi2_last_state) {
-        // Detect reset release to reset counter
         bool reset_state = gpio_get(PIN_RESET);
         if (reset_state && !reset_last_state) {
             seq_counter = 1;
-            printf("\n+----+------+---------+----+-------+\n");
-            printf("| NO | DATA | ADDRESS | RW | CLOCK |\n");
-            printf("+----+------+---------+----+-------+\n");
+            if (hardware_api_monitor_enabled()) {
+                printf("\n+----+------+---------+----+-------+\n");
+                printf("| NO | DATA | ADDRESS | RW | CLOCK |\n");
+                printf("+----+------+---------+----+-------+\n");
+            }
         }
         reset_last_state = reset_state;
 
         uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
         if (a15) addr |= 0x8000u;
         uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
-        bool rwb = (pins >> PIN_RWB) & 1u;   // 0 = read, 1 = write
-        printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
-               seq_counter, data, addr, rwb ? 1 : 0, current_hz);
-        seq_counter++;
-        if (seq_counter > 99) seq_counter = 1;  // wrap at 99
+        bool rwb = (pins >> PIN_RWB) & 1u;
+
+        hardware_api_on_bus_cycle(addr, data, rwb);
+
+        if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
+            printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
+                   seq_counter, data, addr, rwb ? 1 : 0, current_hz);
+            seq_counter++;
+            if (seq_counter > 99) seq_counter = 1;
+        }
     }
     phi2_last_state = phi2;
-}
-
-// ─── ROM upload (raw binary over USB-CDC) ───────────────────────────────
-
-static void cmd_loadbin(void) {
-    printf("OK send %d bytes\n", ROM_SIZE);
-    stdio_flush();
-
-    bool was_active = rom_active;
-    rom_active = false;
-    gpio_set_dir_in_masked(DATA_MASK);
-    reset_assert();
-
-    int n = 0;
-    absolute_time_t deadline = make_timeout_time_ms(2000);
-    while (n < ROM_SIZE) {
-        int c = getchar_timeout_us(0);
-        if (c == PICO_ERROR_TIMEOUT) {
-            if (absolute_time_diff_us(get_absolute_time(), deadline) <= 0) {
-                printf("\nupload timeout after %d bytes\n", n);
-                rom_active = was_active;
-                reset_release();
-                return;
-            }
-            continue;
-        }
-        rom_image[n++] = (uint8_t)c;
-        deadline = make_timeout_time_ms(2000);
-    }
-
-    rom_active = was_active;
-    reset_release();
-    printf("loaded %d bytes\n", n);
-    printf("  reset vector -> $%02X%02X\n",
-           rom_image[0x7FFD], rom_image[0x7FFC]);
-    seq_counter = 1;
-    printf("\n+----+------+---------+----+-------+\n");
-    printf("| NO | DATA | ADDRESS | RW | CLOCK |\n");
-    printf("+----+------+---------+----+-------+\n");
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────────
 
 static void print_banner(void) {
-    printf("\n=== pico-rom-test — auto-run firmware ===\n");
-    printf("65C02 + Pico-as-ROM + HM62256LP on 3.3 V\n");
-    printf("Clock: fixed 0.2 Hz  ROM: ON  Bus monitor: ON\n");
-    printf("Send 'loadbin' + 32768 raw bytes to upload a custom ROM.\n");
-    printf("\n+----+------+---------+----+-------+\n");
-    printf("| NO | DATA | ADDRESS | RW | CLOCK |\n");
-    printf("+----+------+---------+----+-------+\n");
+    printf("\n=== pico-rom-test — Hardware API ===\n");
+    printf("Protocol: ENQ STX ACK JSON EOT ACK\n");
+    printf("Commands: reset, upload_rom, read, request_addr, monitor\n");
+    printf("65C02 clock: %.1f Hz  ROM: ON\n", current_hz);
     stdio_flush();
 }
 
@@ -282,10 +199,19 @@ int main(void) {
     pins_init();
     rom_image_init();
 
+    hw_context_t ctx = {
+        .rom_image     = rom_image,
+        .rom_size      = ROM_SIZE,
+        .rom_active    = &rom_active,
+        .current_hz    = &current_hz,
+        .reset_assert  = reset_assert,
+        .reset_release = reset_release,
+    };
+    hardware_api_init(&ctx);
+
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    // Wait (with a heartbeat) until the host opens the USB-CDC port.
     absolute_time_t led_toggle = get_absolute_time();
     bool led_on = false;
     while (!stdio_usb_connected()) {
@@ -297,47 +223,29 @@ int main(void) {
         tight_loop_contents();
     }
 
-    // Connected — auto-start everything.
     sleep_ms(200);
-    phi2_start_us(2500000);  // 2.5s half-period = 0.2 Hz
+    phi2_start_us(2500000);
     current_hz = 0.2f;
     rom_active = true;
     reset_release();
     print_banner();
 
-    gpio_put(PICO_DEFAULT_LED_PIN, 1);  // solid on = connected & running
+    gpio_put(PICO_DEFAULT_LED_PIN, 1);
 
-    char line[16];
-    int  pos = 0;
     absolute_time_t next_blink = get_absolute_time();
 
     while (true) {
-        // ROM emulation runs every iteration (~MHz polling rate)
         rom_task();
 
-        // Slow heartbeat blink (1 Hz)
         if (absolute_time_diff_us(get_absolute_time(), next_blink) <= 0) {
             gpio_xor_mask(1u << PICO_DEFAULT_LED_PIN);
             next_blink = make_timeout_time_ms(500);
         }
 
-        // Minimal serial input — only "loadbin" is recognised
         int c = getchar_timeout_us(0);
         if (c == PICO_ERROR_TIMEOUT) continue;
-
-        if (c == '\r' || c == '\n') {
-            line[pos] = 0;
-            if (strcmp(line, "loadbin") == 0) {
-                cmd_loadbin();
-            }
-            pos = 0;
-        } else if (pos < (int)sizeof(line) - 1) {
-            line[pos++] = (char)c;
-        } else {
-            // shift out oldest char to make room
-            memmove(line, line + 1, sizeof(line) - 2);
-            line[sizeof(line) - 2] = (char)c;
-            pos = sizeof(line) - 1;
+        if (c == CTRL_ENQ) {
+            hardware_api_handle_enq();
         }
     }
 }
