@@ -237,7 +237,7 @@ Common GND ───────┬─→ Pico pins 3, 8, 13, 18, 23, 28, 33, 38
 | A12 | 22 | 16 (GP12) | 2 |
 | A13 | 23 | 17 (GP13) | 26 |
 | A14 | 24 | 19 (GP14) | 1 |
-| A15 / RAM CE# | 25 | 31 (GP26) | 20 |
+| A15 / RAM CS# | 25 | 31 (GP26) | 20 |
 | D0 | 33 | 20 (GP15) | 11 |
 | D1 | 32 | 21 (GP16) | 12 |
 | D2 | 31 | 22 (GP17) | 13 |
@@ -252,7 +252,6 @@ Common GND ───────┬─→ Pico pins 3, 8, 13, 18, 23, 28, 33, 38
 | From | To | Purpose |
 |---|---|---|
 | 65C02 pin 34 (RWB) | RAM pin 27 (WE#) | Write enable to RAM |
-| 65C02 pin 34 (RWB) | Pico pin 36 (GP23) | Bus monitor read/write detection |
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
 | Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Fixed clock at 0.2 Hz (5s per cycle) |
 
