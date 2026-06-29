@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        fail-fast: false
+        fail-fast: true
         board: [pico, pico_w, pico2, pico2_w]
     steps:
     - uses: actions/checkout@v4.1.7
