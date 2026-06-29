@@ -20,15 +20,14 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Clone repo to ~/tools/pico-sdk
-      run: git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git /home/runner/tools/pico-sdk
-
-    - name: Inspect Pico SDK
+    - name: Clone Pico SDK
       run: |
-        git -C /home/runner/tools/pico-sdk branch --show-current
-        git -C /home/runner/tools/pico-sdk rev-parse HEAD
-        git -C /home/runner/tools/pico-sdk describe --tags --always
-        ls /home/runner/tools/pico-sdk/src/boards/include/boards | sort
+        git clone \
+          --depth=1 \
+          --branch develop \
+          --recurse-submodules \
+          https://github.com/raspberrypi/pico-sdk.git \
+          /home/runner/tools/pico-sdk
 
     - name: Install ARM cross-compiler
       run: |
