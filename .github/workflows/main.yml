@@ -40,7 +40,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          ../bin/pico-rom-test-pico.uf2
+          bin/pico-rom-test-pico.uf2
         token: ${{ secrets.GITHUB_TOKEN }}
         make_latest: true
 
