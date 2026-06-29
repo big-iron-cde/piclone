@@ -1,6 +1,6 @@
 # Pinout Reference
 
-The full per-chip pin maps. For the condensed bus/connection tables, see
+The full per-chip pin maps. For the condensed bus/connection tables, see below:
 [Wiring](wiring.md).
 
 ## Raspberry Pi Pico 2 — GPIO allocation
