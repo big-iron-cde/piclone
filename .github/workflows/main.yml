@@ -3,9 +3,20 @@ name: Build
 on:
   push:
     tags:
-      - release
+      - '*.*.*'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
+    - uses: actions/checkout@v4.1.7
+      with:
+        fetch-depth: 0
+    - name: Clone the repo
+      run: |
+        git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git
+        cd pico-sdk
+        git reset --hard 6a7db34
+    - name: 
+
