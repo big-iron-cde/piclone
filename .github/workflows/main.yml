@@ -37,11 +37,10 @@ jobs:
         
     - name: Create release
       id: create-release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         files: |
           bin/pico-rom-test-pico.uf2
-        token: ${{ secrets.GITHUB_TOKEN }}
         make_latest: true
 
     env:
