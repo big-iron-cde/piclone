@@ -1,11 +1,8 @@
 /*
- * Hardware API — JSON commands over framed serial
+ * Hardware API — JSON v1 commands over framed serial
  *
- * Commands:
- *   {"cmd":"reset","assert":true|false}
- *   {"cmd":"upload_rom","size":32768}
- *   {"cmd":"read","until":"stp","max_cycles":N}
- *   {"cmd":"request_addr"}
+ * All payloads require {"v":1,...}. Commands:
+ *   reset, upload_rom (begin/chunk/commit), read, request_addr, monitor, status
  */
 
 #ifndef HARDWARE_API_H
@@ -32,9 +29,7 @@ void hardware_api_handle_enq(void);
 /* Call from rom_task on each PHI2 rising-edge sample. */
 void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rw);
 
-/* Last sampled bus address (updated every PHI2 edge). */
 uint16_t hardware_api_last_addr(void);
-
 bool hardware_api_is_reading(void);
 bool hardware_api_monitor_enabled(void);
 

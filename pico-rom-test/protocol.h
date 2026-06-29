@@ -15,7 +15,7 @@
 #define CTRL_EOT  0x04
 #define CTRL_NACK 0x15
 
-#define PROTO_JSON_MAX   512
+#define PROTO_JSON_MAX   2048
 #define PROTO_BINARY_MAX 0x8000
 
 bool proto_read_byte(uint8_t *out, uint32_t timeout_ms);
@@ -29,8 +29,5 @@ bool proto_read_frame_payload(uint8_t *buf, size_t buf_size, size_t *out_len);
 
 /* Pico → Host: send one framed payload; wait for host ACK (NACK = fail). */
 bool proto_send_frame(const uint8_t *payload, size_t len);
-
-/* Read raw binary frame (ENQ already consumed). Used after upload_rom command. */
-bool proto_read_binary_frame(uint8_t *buf, size_t expected_len);
 
 #endif

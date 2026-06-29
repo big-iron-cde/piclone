@@ -189,7 +189,7 @@ static void rom_task(void) {
 static void print_banner(void) {
     printf("\n=== pico-rom-test — Hardware API ===\n");
     printf("Protocol: ENQ STX ACK JSON EOT ACK\n");
-    printf("Commands: reset, upload_rom, read, request_addr, monitor\n");
+    printf("Commands: reset, upload_rom, read, request_addr, monitor, status (v1 JSON)\n");
     printf("65C02 clock: %.1f Hz  ROM: ON\n", current_hz);
     stdio_flush();
 }

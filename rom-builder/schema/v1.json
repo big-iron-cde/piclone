@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pico-rom.local/schema/v1.json",
+  "title": "PICO-ROM Hardware API v1",
+  "description": "Framed serial payloads (ENQ/STX/ACK/EOT). All payloads are JSON with v=1.",
+  "definitions": {
+    "envelope": {
+      "type": "object",
+      "required": ["v"],
+      "properties": {
+        "v": { "const": 1 },
+        "id": { "type": "string", "description": "Optional correlation id echoed in responses" }
+      }
+    },
+    "request_reset": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd", "assert"],
+      "properties": {
+        "cmd": { "const": "reset" },
+        "assert": { "type": "boolean" }
+      },
+      "example": { "v": 1, "id": "req-1", "cmd": "reset", "assert": true }
+    },
+    "request_upload_begin": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd", "action", "size"],
+      "properties": {
+        "cmd": { "const": "upload_rom" },
+        "action": { "const": "begin" },
+        "size": { "const": 32768 }
+      },
+      "example": { "v": 1, "cmd": "upload_rom", "action": "begin", "size": 32768 }
+    },
+    "request_upload_chunk": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd", "action", "offset", "data"],
+      "properties": {
+        "cmd": { "const": "upload_rom" },
+        "action": { "const": "chunk" },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 32767 },
+        "data": { "type": "string", "contentEncoding": "base64" }
+      },
+      "example": { "v": 1, "cmd": "upload_rom", "action": "chunk", "offset": 0, "data": "GBo=" }
+    },
+    "request_upload_commit": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd", "action"],
+      "properties": {
+        "cmd": { "const": "upload_rom" },
+        "action": { "const": "commit" }
+      },
+      "example": { "v": 1, "cmd": "upload_rom", "action": "commit" }
+    },
+    "request_read": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd", "until", "max_cycles"],
+      "properties": {
+        "cmd": { "const": "read" },
+        "until": { "const": "stp" },
+        "max_cycles": { "type": "integer", "minimum": 1, "maximum": 100000 }
+      },
+      "example": { "v": 1, "cmd": "read", "until": "stp", "max_cycles": 10000 }
+    },
+    "request_request_addr": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd"],
+      "properties": { "cmd": { "const": "request_addr" } },
+      "example": { "v": 1, "cmd": "request_addr" }
+    },
+    "request_monitor": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd", "enable"],
+      "properties": {
+        "cmd": { "const": "monitor" },
+        "enable": { "type": "boolean" }
+      },
+      "example": { "v": 1, "cmd": "monitor", "enable": false }
+    },
+    "request_status": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "cmd"],
+      "properties": { "cmd": { "const": "status" } },
+      "example": { "v": 1, "cmd": "status" }
+    },
+    "response_ok": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "ok", "cmd"],
+      "properties": {
+        "ok": { "const": true },
+        "cmd": { "type": "string" }
+      }
+    },
+    "response_error": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "ok", "error"],
+      "properties": {
+        "ok": { "const": false },
+        "error": { "type": "string" },
+        "detail": { "type": "string" }
+      },
+      "example": { "v": 1, "ok": false, "error": "unsupported_version", "detail": "v must be 1" }
+    },
+    "event_cycle": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "type", "event", "seq", "addr", "data", "rw"],
+      "properties": {
+        "type": { "const": "event" },
+        "event": { "const": "cycle" },
+        "seq": { "type": "integer" },
+        "addr": { "type": "string", "pattern": "^[0-9A-Fa-f]{4}$" },
+        "data": { "type": "string", "pattern": "^[0-9A-Fa-f]{2}$" },
+        "rw": { "type": "integer", "enum": [0, 1] }
+      },
+      "example": { "v": 1, "type": "event", "event": "cycle", "seq": 1, "addr": "8000", "data": "18", "rw": 0 }
+    },
+    "event_done": {
+      "allOf": [{ "$ref": "#/definitions/envelope" }],
+      "required": ["v", "type", "event", "ok", "reason", "cycles", "addr"],
+      "properties": {
+        "type": { "const": "event" },
+        "event": { "const": "done" },
+        "ok": { "type": "boolean" },
+        "reason": { "type": "string", "enum": ["stp", "max_cycles", "host_nack"] },
+        "cycles": { "type": "integer" },
+        "addr": { "type": "string" }
+      },
+      "example": { "v": 1, "type": "event", "event": "done", "ok": true, "reason": "stp", "cycles": 14, "addr": "800D" }
+    }
+  },
+  "constants": {
+    "PROTO_JSON_MAX": 2048,
+    "ROM_SIZE": 32768,
+    "CHUNK_RAW_MAX": 1476,
+    "CHUNK_RAW_MAX_note": "floor((PROTO_JSON_MAX - 128) / 4) * 3, aligned to 4 bytes"
+  }
+}

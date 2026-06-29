@@ -322,9 +322,21 @@ make
 
 ---
 
-### Hardware API
+### Hardware API (v1 JSON)
 
-The host talks to the Pico over USB-CDC at **115200 baud** using a framed serial protocol. Payloads are JSON (except ROM binary upload). This is designed for scripted bring-up and CI.
+The host talks to the Pico over USB-CDC at **115200 baud** using a framed serial protocol. **All payloads are JSON** with `"v":1` (including chunked ROM upload). Schema: [`rom-builder/schema/v1.json`](rom-builder/schema/v1.json).
+
+**Primary host client:** [Romulan](https://github.com/big-iron-cde/romulan) at **`~/Downloads/romulan`** (sibling of this repo) — build ROMs from annotated hex and upload via the framed API:
+
+```bash
+cd ~/Downloads/romulan
+uv sync
+uv run romulan program.txt --build --upload
+uv run romulan hardware upload bin/rom.bin --port /dev/ttyACM0
+uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
+```
+
+Legacy wrappers in [`rom-builder/`](rom-builder/) import Romulan from `~/Downloads/romulan` (`upload-rom.py`, `hardware_api.py`, `api_server.py`). Override with `ROMULAN_PATH` if installed elsewhere.
 
 #### Framing
 
@@ -350,42 +362,43 @@ Sender                         Receiver
 
 **Important:** do not open a plain serial monitor on `/dev/ttyACM0` while using the Hardware API — unstructured output will corrupt framing. Only one process may hold the port at a time.
 
-The **`monitor`** command also prints unstructured ASCII (`|`-delimited table rows). That state **persists on the Pico** until you send `{"cmd":"monitor","enable":false}` or start a **`read`** capture (firmware auto-disables it). Do not leave monitor enabled before running `upload-rom.py`, `read_until_stp()`, or other scripted API calls.
+The **`monitor`** command also prints unstructured ASCII (`|`-delimited table rows). That state **persists on the Pico** until you send `{"v":1,"cmd":"monitor","enable":false}` or start a **`read`** capture (firmware auto-disables it). Do not leave monitor enabled before running Romulan upload, `read_until_stp()`, or other scripted API calls.
 
-#### Commands
+#### Commands (v1 envelope)
 
-All commands are JSON sent in a framed payload (host → Pico). The Pico responds with a framed JSON payload (Pico → host).
+Every request includes `"v":1`. Optional `"id"` is echoed in responses.
 
 | Command | Request | Response |
 |---------|---------|----------|
-| **reset** | `{"cmd":"reset","assert":true}` or `"assert":false` | `{"ok":true,"cmd":"reset","asserted":true}` |
-| **upload_rom** | `{"cmd":"upload_rom","size":32768}` then a **second binary frame** (32768 raw bytes) | `{"ok":true,"cmd":"upload_rom","bytes":32768,"reset_vector":"8000"}` |
-| **read** | `{"cmd":"read","until":"stp","max_cycles":10000}` | Streams `{"type":"cycle",...}` frames, then `{"type":"done","reason":"stp",...}` |
-| **request_addr** | `{"cmd":"request_addr"}` | `{"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":0.2}` |
-| **monitor** | `{"cmd":"monitor","enable":true}` | Enables/disables ASCII bus table on USB (off by default) |
+| **reset** | `{"v":1,"cmd":"reset","assert":true}` | `{"v":1,"ok":true,"cmd":"reset","asserted":true}` |
+| **upload_rom** | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; commit returns `reset_vector` |
+| **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | event stream then `{"type":"event","event":"done",...}` |
+| **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":0.2}` |
+| **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
+| **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, …) |
 
-**reset** — Assert or release the 6502 RESET line (GP27). Use `"assert":true` to hold the CPU in reset, `"assert":false` to let it run.
+**upload_rom** — JSON-only chunked transfer (1476 raw bytes per chunk, base64-encoded):
 
-**upload_rom** — Two-step transfer:
-1. Send the JSON command frame; Pico replies `{"ok":true,"awaiting":32768}`.
-2. Send a binary frame containing exactly 32768 bytes.
+1. `{"v":1,"cmd":"upload_rom","action":"begin","size":32768}`
+2. `{"v":1,"cmd":"upload_rom","action":"chunk","offset":0,"data":"<base64>"}` (repeat until 32 KB)
+3. `{"v":1,"cmd":"upload_rom","action":"commit"}` → `{"reset_vector":"8000",...}`
 
-RESET is asserted for the duration of the upload so the CPU cannot fetch half-written ROM data, then released automatically.
+RESET is asserted for the duration of the upload so the CPU cannot fetch half-written ROM data, then released on commit.
 
 **read** — Captures bus activity as JSON. Streams one frame per PHI2 rising edge until:
 - the CPU **fetches STP** (`0xDB` on a read cycle), or
 - `max_cycles` is reached.
 
-Each cycle frame looks like:
+Each cycle event:
 
 ```json
-{"type":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
+{"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
 ```
 
-Final frame:
+Final event:
 
 ```json
-{"type":"done","ok":true,"reason":"stp","cycles":14,"addr":"800D"}
+{"v":1,"type":"event","event":"done","ok":true,"reason":"stp","cycles":14,"addr":"800D"}
 ```
 
 To use this in automated tests, end your ROM with a **`STP` (`0xDB`)** instruction (not `BRK` — that opcode is `0x00`).
@@ -412,48 +425,45 @@ Use **`read`** (JSON cycle stream) for automated tests; reserve **`monitor`** fo
 
 ### Host-side workflow
 
-Host tools live in **`rom-builder/`** at the **repo root** (not under `pico-rom-test/build/`).
+**Romulan** (recommended) — see [`~/Downloads/romulan/README.md`](../romulan/README.md).
 
-Install the Python dependency once:
-
-```bash
-pip install --user pyserial
-```
-
-Build and upload a ROM:
+**Legacy `rom-builder/` scripts** (wrap Romulan):
 
 ```bash
-cd rom-builder   # from repo root: PICO-ROM/rom-builder
-python3 build-rom.py                     # → bin/rom.bin  (preferred)
-python3 upload-rom.py                    # upload via Hardware API
-python3 upload-rom.py --read-stp         # upload, disable monitor, reset, capture until STP
+cd rom-builder
+pip install -r requirements.txt
+python3 upload-rom.py                    # upload via Hardware API v1
+python3 upload-rom.py --read-stp         # upload, reset, capture until STP
 ```
 
-`build-rom.py` is the maintained ROM builder (CPU-address helpers, STP terminator for automated capture). `main.py` is a minimal legacy example that also works.
+**HTTP REST API** (any client — curl, browser, CI):
 
-The host API discards stray serial bytes (monitor lines, echoed ACKs) while resyncing to frame boundaries.
+```bash
+cd rom-builder
+PICO_PORT=/dev/ttyACM0 uvicorn api_server:app --host 127.0.0.1 --port 8080
+curl http://127.0.0.1:8080/v1/status
+curl -X POST http://127.0.0.1:8080/v1/reset -H 'Content-Type: application/json' -d '{"assert":true}'
+curl -X POST http://127.0.0.1:8080/v1/rom --data-binary @bin/rom.bin
+```
 
-Use the API from Python (for CI or custom scripts):
+OpenAPI docs: `http://127.0.0.1:8080/docs`
+
+Use the Python client from Romulan or `rom-builder/`:
 
 ```python
-from hardware_api import HardwareAPI
+# From Romulan (~/Downloads/romulan)
+from romulan.hardware_api import HardwareAPI
 
 with HardwareAPI("/dev/ttyACM0") as api:
-    print(api.request_addr())
-    api.reset(assert_reset=True)         # hold CPU in reset
-    api.reset(assert_reset=False)        # release
-    result = api.upload_rom_json(open("bin/rom.bin", "rb").read())
-    api.monitor(enable=False)              # required if monitor was used earlier
-    api.reset(assert_reset=True)         # restart from reset vector before capture
+    print(api.status())
+    api.reset(assert_reset=True)
     api.reset(assert_reset=False)
-    capture = api.read_until_stp(max_cycles=500)  # also disables monitor; 12 s/frame
+    result = api.upload_rom(open("bin/rom.bin", "rb").read())
+    capture = api.read_until_stp(max_cycles=500)
     print(capture.reason, len(capture.cycles))
-    api.monitor(enable=True)             # optional — disable again before upload/read
 ```
 
-`upload-rom.py --read-stp` disables monitor, pulses reset, and captures automatically.
-
-**Note:** `rom_image[]` is lost on Pico power cycle — re-run `upload-rom.py` after each reboot.
+**Note:** `rom_image[]` is lost on Pico power cycle — re-upload after each reboot.
 
 ---
 

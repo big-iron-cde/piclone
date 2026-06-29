@@ -18,6 +18,13 @@ add_executable(pico-rom-test
     main.c
     protocol.c
     hardware_api.c
+    json_util.c
+    third_party/cJSON/cJSON.c
+)
+
+target_include_directories(pico-rom-test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/third_party/cJSON
 )
 
 target_link_libraries(pico-rom-test

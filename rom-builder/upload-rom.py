@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
 """
-upload-rom.py — push a 32 KB ROM image via the Hardware API.
+upload-rom.py — push a 32 KB ROM image via the Hardware API v1 (Romulan client).
 
 Usage:
     python3 upload-rom.py [PORT] [BIN]
-
-Defaults:
-    PORT = /dev/ttyACM0
-    BIN  = bin/rom.bin
-
-Protocol (framed serial):
-    ENQ → STX → ACK → JSON/binary payload → EOT → ACK/NACK
-
-Steps:
-    1. {"cmd":"upload_rom","size":32768}
-    2. binary frame with 32768 raw bytes
-    3. optional read-until-STP capture
 """
 
 from __future__ import annotations
@@ -37,8 +25,8 @@ def upload(port: str, path: Path, read_stp: bool = False) -> None:
 
     print(f"Opening {port} ...")
     with HardwareAPI(port) as api:
-        print(">> upload_rom")
-        result = api.upload_rom_json(data)
+        print(">> upload_rom (v1 chunked JSON)")
+        result = api.upload_rom(data)
         print(json.dumps(result, indent=2))
 
         if read_stp:
@@ -51,7 +39,7 @@ def upload(port: str, path: Path, read_stp: bool = False) -> None:
             capture = api.read_until_stp(max_cycles=500)
             print(f"   reason={capture.reason}  cycles={len(capture.cycles)}")
             for cyc in capture.cycles[:20]:
-                print(f"   {cyc.seq:3d}  {cyc.addr}  {cyc.data}  rw={cyc.rw}")
+                print(f"   {cyc.get('seq', '?'):>3}  {cyc['addr']}  {cyc['data']}  rw={cyc['rw']}")
             if len(capture.cycles) > 20:
                 print(f"   ... {len(capture.cycles) - 20} more")
 

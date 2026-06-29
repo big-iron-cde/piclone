@@ -1,141 +1,253 @@
 #include "hardware_api.h"
 #include "protocol.h"
+#include "json_util.h"
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
 #define STP_OPCODE 0xDB
+#define DATA_MASK  (0xFFu << 15)
 
 static hw_context_t hw;
 static uint16_t last_addr;
 static bool read_active;
 static bool monitor_enabled;
+static bool reset_asserted;
 static uint32_t read_max_cycles;
 static uint32_t read_cycle_count;
 
-static bool json_has_cmd(const char *json, const char *cmd) {
-    char needle[48];
-    snprintf(needle, sizeof(needle), "\"cmd\":\"%s\"", cmd);
-    return strstr(json, needle) != NULL;
+/* upload_rom state */
+static bool upload_active;
+static uint32_t upload_expected;
+static uint32_t upload_received;
+static uint32_t upload_next_offset;
+
+static void upload_reset_state(void) {
+    upload_active = false;
+    upload_expected = 0;
+    upload_received = 0;
+    upload_next_offset = 0;
 }
 
-static bool json_bool_field(const char *json, const char *key, bool default_val) {
-    char needle[32];
-    snprintf(needle, sizeof(needle), "\"%s\":true", key);
-    if (strstr(json, needle)) {
-        return true;
-    }
-    snprintf(needle, sizeof(needle), "\"%s\":false", key);
-    if (strstr(json, needle)) {
-        return false;
-    }
-    return default_val;
+static bool upload_is_complete(void) {
+    return upload_received >= hw.rom_size;
 }
 
-static uint32_t json_uint_field(const char *json, const char *key, uint32_t default_val) {
-    char pattern[32];
-    snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-    const char *p = strstr(json, pattern);
-    if (!p) {
-        return default_val;
-    }
-    p += strlen(pattern);
-    while (*p == ' ') {
-        p++;
-    }
-    return (uint32_t)strtoul(p, NULL, 10);
-}
-
-static bool send_json_response(const char *json) {
-    return proto_send_frame((const uint8_t *)json, strlen(json));
-}
-
-static void cmd_reset(const char *json) {
-    bool assert_reset = json_bool_field(json, "assert", true);
+static void cmd_reset(cJSON *root, const char *req_id) {
+    bool assert_reset = json_get_bool(root, "assert", true);
     if (assert_reset) {
         hw.reset_assert();
+        reset_asserted = true;
     } else {
         hw.reset_release();
+        reset_asserted = false;
     }
-    char resp[128];
-    snprintf(resp, sizeof(resp),
-             "{\"ok\":true,\"cmd\":\"reset\",\"asserted\":%s}",
-             assert_reset ? "true" : "false");
-    send_json_response(resp);
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "reset");
+    cJSON_AddBoolToObject(resp, "asserted", assert_reset);
+    json_send_object(resp);
+    cJSON_Delete(resp);
 }
 
-static void cmd_upload_rom(const char *json) {
-    uint32_t size = json_uint_field(json, "size", (uint32_t)hw.rom_size);
-    if (size != hw.rom_size) {
-        send_json_response("{\"ok\":false,\"error\":\"bad_size\"}");
+static void cmd_upload_rom(cJSON *root, const char *req_id) {
+    const char *action = json_get_string(root, "action");
+    if (!action) {
+        json_send_error(req_id, "bad_request", "upload_rom requires action");
         return;
     }
 
-    send_json_response("{\"ok\":true,\"cmd\":\"upload_rom\",\"awaiting\":32768}");
+    if (strcmp(action, "begin") == 0) {
+        uint32_t size = json_get_uint(root, "size", 0);
+        if (size != hw.rom_size) {
+            json_send_error(req_id, "bad_size", "size must be 32768");
+            return;
+        }
 
-    bool was_active = *hw.rom_active;
-    *hw.rom_active = false;
-    gpio_set_dir_in_masked(0xFFu << 15);
-    hw.reset_assert();
+        upload_reset_state();
+        upload_active = true;
+        upload_expected = size;
+        upload_next_offset = 0;
+        upload_received = 0;
 
-    if (!proto_read_binary_frame(hw.rom_image, hw.rom_size)) {
-        *hw.rom_active = was_active;
+        bool was_active = *hw.rom_active;
+        *hw.rom_active = false;
+        gpio_set_dir_in_masked(DATA_MASK);
+        hw.reset_assert();
+        reset_asserted = true;
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+        json_attach_id(resp, req_id);
+        cJSON_AddBoolToObject(resp, "ok", true);
+        cJSON_AddStringToObject(resp, "cmd", "upload_rom");
+        cJSON_AddStringToObject(resp, "action", "begin");
+        cJSON_AddNumberToObject(resp, "received", 0);
+        cJSON_AddNumberToObject(resp, "expected", (double)upload_expected);
+        json_send_object(resp);
+        cJSON_Delete(resp);
+        (void)was_active;
+        return;
+    }
+
+    if (!upload_active) {
+        json_send_error(req_id, "upload_inactive", "call upload_rom begin first");
+        return;
+    }
+
+    if (strcmp(action, "chunk") == 0) {
+        uint32_t offset = json_get_uint(root, "offset", UINT32_MAX);
+        const char *data_b64 = json_get_string(root, "data");
+        if (!data_b64 || offset >= hw.rom_size) {
+            json_send_error(req_id, "bad_offset", "invalid offset or missing data");
+            return;
+        }
+        if (offset != upload_next_offset) {
+            json_send_error(req_id, "bad_offset", "chunks must be sent in order");
+            return;
+        }
+
+        size_t max_dec = hw.rom_size - offset;
+        if (max_dec > UPLOAD_CHUNK_RAW_MAX) {
+            max_dec = UPLOAD_CHUNK_RAW_MAX;
+        }
+
+        int decoded = json_base64_decode(data_b64, hw.rom_image + offset, max_dec);
+        if (decoded <= 0) {
+            json_send_error(req_id, "bad_base64", "could not decode chunk data");
+            return;
+        }
+        if ((uint32_t)decoded > max_dec) {
+            json_send_error(req_id, "bad_base64", "chunk too large");
+            return;
+        }
+
+        upload_next_offset += (uint32_t)decoded;
+        upload_received = upload_next_offset;
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+        json_attach_id(resp, req_id);
+        cJSON_AddBoolToObject(resp, "ok", true);
+        cJSON_AddStringToObject(resp, "cmd", "upload_rom");
+        cJSON_AddStringToObject(resp, "action", "chunk");
+        cJSON_AddNumberToObject(resp, "offset", (double)offset);
+        cJSON_AddNumberToObject(resp, "received", (double)upload_received);
+        json_send_object(resp);
+        cJSON_Delete(resp);
+        return;
+    }
+
+    if (strcmp(action, "commit") == 0) {
+        if (!upload_is_complete()) {
+            char detail[64];
+            snprintf(detail, sizeof(detail), "received %lu of %lu bytes",
+                     (unsigned long)upload_received, (unsigned long)upload_expected);
+            json_send_error(req_id, "incomplete", detail);
+            return;
+        }
+
+        *hw.rom_active = true;
         hw.reset_release();
-        send_json_response("{\"ok\":false,\"error\":\"binary_frame\"}");
+        reset_asserted = false;
+        upload_active = false;
+
+        char rv[8];
+        snprintf(rv, sizeof(rv), "%02X%02X",
+                 hw.rom_image[0x7FFD], hw.rom_image[0x7FFC]);
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+        json_attach_id(resp, req_id);
+        cJSON_AddBoolToObject(resp, "ok", true);
+        cJSON_AddStringToObject(resp, "cmd", "upload_rom");
+        cJSON_AddStringToObject(resp, "action", "commit");
+        cJSON_AddNumberToObject(resp, "bytes", (double)hw.rom_size);
+        cJSON_AddStringToObject(resp, "reset_vector", rv);
+        json_send_object(resp);
+        cJSON_Delete(resp);
         return;
     }
 
-    *hw.rom_active = was_active;
-    hw.reset_release();
-
-    char resp[160];
-    snprintf(resp, sizeof(resp),
-             "{\"ok\":true,\"cmd\":\"upload_rom\",\"bytes\":%u,"
-             "\"reset_vector\":\"%02X%02X\"}",
-             (unsigned)hw.rom_size,
-             hw.rom_image[0x7FFD], hw.rom_image[0x7FFC]);
-    send_json_response(resp);
+    json_send_error(req_id, "bad_action", "unknown upload_rom action");
 }
 
-static void cmd_read(const char *json) {
-    if (!strstr(json, "\"until\":\"stp\"") && !strstr(json, "\"until\": \"stp\"")) {
-        send_json_response("{\"ok\":false,\"error\":\"unsupported_until\"}");
+static void cmd_read(cJSON *root, const char *req_id) {
+    const char *until = json_get_string(root, "until");
+    if (!until || strcmp(until, "stp") != 0) {
+        json_send_error(req_id, "unsupported_until", "only until=stp supported");
         return;
     }
 
-    read_max_cycles = json_uint_field(json, "max_cycles", 10000);
+    read_max_cycles = json_get_uint(root, "max_cycles", 10000);
     if (read_max_cycles == 0) {
         read_max_cycles = 10000;
     }
     read_cycle_count = 0;
     read_active = true;
-    monitor_enabled = false;  /* ASCII table corrupts framed cycle stream */
+    monitor_enabled = false;
 
-    char resp[128];
-    snprintf(resp, sizeof(resp),
-             "{\"ok\":true,\"cmd\":\"read\",\"until\":\"stp\",\"max_cycles\":%lu}",
-             (unsigned long)read_max_cycles);
-    send_json_response(resp);
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "read");
+    cJSON_AddStringToObject(resp, "until", "stp");
+    cJSON_AddNumberToObject(resp, "max_cycles", (double)read_max_cycles);
+    json_send_object(resp);
+    cJSON_Delete(resp);
 }
 
-static void cmd_request_addr(void) {
-    char resp[128];
-    snprintf(resp, sizeof(resp),
-             "{\"ok\":true,\"cmd\":\"request_addr\",\"addr\":\"%04X\",\"phi2_hz\":%.1f}",
-             last_addr, *hw.current_hz);
-    send_json_response(resp);
+static void cmd_request_addr(const char *req_id) {
+    char addr[8];
+    snprintf(addr, sizeof(addr), "%04X", last_addr);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "request_addr");
+    cJSON_AddStringToObject(resp, "addr", addr);
+    cJSON_AddNumberToObject(resp, "phi2_hz", (double)*hw.current_hz);
+    json_send_object(resp);
+    cJSON_Delete(resp);
 }
 
-static void cmd_monitor(const char *json) {
-    monitor_enabled = json_bool_field(json, "enable", true);
-    char resp[96];
-    snprintf(resp, sizeof(resp),
-             "{\"ok\":true,\"cmd\":\"monitor\",\"enable\":%s}",
-             monitor_enabled ? "true" : "false");
-    send_json_response(resp);
+static void cmd_monitor(cJSON *root, const char *req_id) {
+    monitor_enabled = json_get_bool(root, "enable", true);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "monitor");
+    cJSON_AddBoolToObject(resp, "enable", monitor_enabled);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+static void cmd_status(const char *req_id) {
+    char addr[8];
+    snprintf(addr, sizeof(addr), "%04X", last_addr);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "status");
+    cJSON_AddNumberToObject(resp, "phi2_hz", (double)*hw.current_hz);
+    cJSON_AddBoolToObject(resp, "rom_active", *hw.rom_active);
+    cJSON_AddBoolToObject(resp, "reset_asserted", reset_asserted);
+    cJSON_AddStringToObject(resp, "last_addr", addr);
+    cJSON_AddBoolToObject(resp, "read_active", read_active);
+    cJSON_AddBoolToObject(resp, "monitor_enabled", monitor_enabled);
+    cJSON_AddBoolToObject(resp, "upload_active", upload_active);
+    json_send_object(resp);
+    cJSON_Delete(resp);
 }
 
 void hardware_api_init(const hw_context_t *ctx) {
@@ -143,6 +255,8 @@ void hardware_api_init(const hw_context_t *ctx) {
     last_addr = 0;
     read_active = false;
     monitor_enabled = false;
+    reset_asserted = false;
+    upload_reset_state();
 }
 
 void hardware_api_handle_enq(void) {
@@ -155,24 +269,64 @@ void hardware_api_handle_enq(void) {
     }
     buf[len] = '\0';
 
-    /* Abort a stale read capture when any other command arrives. */
-    if (!json_has_cmd((char *)buf, "read")) {
+    cJSON *root = NULL;
+    if (!json_parse_frame((char *)buf, &root)) {
+        json_send_error(NULL, "parse_error", "invalid JSON");
+        return;
+    }
+
+    const char *req_id = json_id_from_root(root);
+
+    if (!json_check_version(root, req_id)) {
+        json_send_error(req_id, "unsupported_version", "v must be 1");
+        cJSON_Delete(root);
+        return;
+    }
+
+    const char *cmd = json_get_string(root, "cmd");
+    if (!cmd) {
+        json_send_error(req_id, "bad_request", "missing cmd");
+        cJSON_Delete(root);
+        return;
+    }
+
+    if (strcmp(cmd, "read") != 0) {
         read_active = false;
     }
 
-    if (json_has_cmd((char *)buf, "reset")) {
-        cmd_reset((char *)buf);
-    } else if (json_has_cmd((char *)buf, "upload_rom")) {
-        cmd_upload_rom((char *)buf);
-    } else if (json_has_cmd((char *)buf, "read")) {
-        cmd_read((char *)buf);
-    } else if (json_has_cmd((char *)buf, "request_addr")) {
-        cmd_request_addr();
-    } else if (json_has_cmd((char *)buf, "monitor")) {
-        cmd_monitor((char *)buf);
+    if (strcmp(cmd, "reset") == 0) {
+        cmd_reset(root, req_id);
+    } else if (strcmp(cmd, "upload_rom") == 0) {
+        cmd_upload_rom(root, req_id);
+    } else if (strcmp(cmd, "read") == 0) {
+        cmd_read(root, req_id);
+    } else if (strcmp(cmd, "request_addr") == 0) {
+        cmd_request_addr(req_id);
+    } else if (strcmp(cmd, "monitor") == 0) {
+        cmd_monitor(root, req_id);
+    } else if (strcmp(cmd, "status") == 0) {
+        cmd_status(req_id);
     } else {
-        send_json_response("{\"ok\":false,\"error\":\"unknown_cmd\"}");
+        json_send_error(req_id, "unknown_cmd", cmd);
     }
+
+    cJSON_Delete(root);
+}
+
+static void send_read_event_done(bool ok, const char *reason, uint16_t addr) {
+    char addr_s[8];
+    snprintf(addr_s, sizeof(addr_s), "%04X", addr);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    cJSON_AddStringToObject(resp, "type", "event");
+    cJSON_AddStringToObject(resp, "event", "done");
+    cJSON_AddBoolToObject(resp, "ok", ok);
+    cJSON_AddStringToObject(resp, "reason", reason);
+    cJSON_AddNumberToObject(resp, "cycles", (double)read_cycle_count);
+    cJSON_AddStringToObject(resp, "addr", addr_s);
+    json_send_object(resp);
+    cJSON_Delete(resp);
 }
 
 void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rw) {
@@ -182,27 +336,35 @@ void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rw) {
     }
 
     read_cycle_count++;
-    char resp[160];
-    snprintf(resp, sizeof(resp),
-             "{\"type\":\"cycle\",\"seq\":%lu,\"addr\":\"%04X\",\"data\":\"%02X\",\"rw\":%d}",
-             (unsigned long)read_cycle_count, addr, data, rw ? 1 : 0);
-    if (!proto_send_frame((const uint8_t *)resp, strlen(resp))) {
+
+    char addr_s[8];
+    char data_s[4];
+    snprintf(addr_s, sizeof(addr_s), "%04X", addr);
+    snprintf(data_s, sizeof(data_s), "%02X", data);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    cJSON_AddStringToObject(resp, "type", "event");
+    cJSON_AddStringToObject(resp, "event", "cycle");
+    cJSON_AddNumberToObject(resp, "seq", (double)read_cycle_count);
+    cJSON_AddStringToObject(resp, "addr", addr_s);
+    cJSON_AddStringToObject(resp, "data", data_s);
+    cJSON_AddNumberToObject(resp, "rw", rw ? 1 : 0);
+
+    if (!json_send_object(resp)) {
+        cJSON_Delete(resp);
         read_active = false;
-        send_json_response("{\"type\":\"done\",\"ok\":false,\"reason\":\"host_nack\"}");
+        send_read_event_done(false, "host_nack", addr);
         return;
     }
+    cJSON_Delete(resp);
 
     bool stp_fetch = (!rw && data == STP_OPCODE);
     bool limit = (read_cycle_count >= read_max_cycles);
 
     if (stp_fetch || limit) {
         read_active = false;
-        char done[160];
-        snprintf(done, sizeof(done),
-                 "{\"type\":\"done\",\"ok\":true,\"reason\":\"%s\",\"cycles\":%lu,\"addr\":\"%04X\"}",
-                 stp_fetch ? "stp" : "max_cycles",
-                 (unsigned long)read_cycle_count, addr);
-        send_json_response(done);
+        send_read_event_done(true, stp_fetch ? "stp" : "max_cycles", addr);
     }
 }
 
