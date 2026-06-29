@@ -15,20 +15,14 @@ jobs:
         fetch-depth: 0
 
     - name: Clone repo to ~/tools/pico-sdk
-      run: git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git ~/tools/pico-sdk
+      run: git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git /home/runner/tools/pico-sdk
 
-    - name: Make picoprom folder and copy important files
-      run: |
-        mkdir -p "${{ github.workspace }}/../picoprom"
-        cp ~/tools/pico-sdk/external/pico_sdk_import.cmake "${{ github.workspace }}/../picoprom/"
-
-    - name: Build for pico 1
-      env:
-        PICO_SDK_PATH: ~/tools/pico-sdk
+    - name: Build for Pico 1
       run: |
         mkdir -p build && cd build
-        cmake .. -DPICO_BOARD={BOARD}
+        cmake .. -DPICO_BOARD=pico
         make
-
+    env:
+      PICO_SDK_PATH: /home/runner/tools/pico-sdk
 # need to add release
 
