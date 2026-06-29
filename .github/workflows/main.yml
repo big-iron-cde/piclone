@@ -23,10 +23,12 @@ jobs:
     - name: Clone repo to ~/tools/pico-sdk
       run: git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git /home/runner/tools/pico-sdk
 
-    - name: Check SDK version
+    - name: Inspect Pico SDK
       run: |
-        git -C /home/runner/tools/pico-sdk log -1 --oneline
-        ls /home/runner/tools/pico-sdk/src/boards/include/boards | grep pico
+        git -C /home/runner/tools/pico-sdk branch --show-current
+        git -C /home/runner/tools/pico-sdk rev-parse HEAD
+        git -C /home/runner/tools/pico-sdk describe --tags --always
+        ls /home/runner/tools/pico-sdk/src/boards/include/boards | sort
 
     - name: Install ARM cross-compiler
       run: |
@@ -41,7 +43,7 @@ jobs:
         cd pico-rom-test
         mkdir -p build && cd build
         cmake .. -DPICO_BOARD=${{ matrix.board }}
-        cmake --build . -j$(nproc)
+        make
         cp pico-rom-test.uf2 ../../bin/pico-rom-test-${{ matrix.board }}.uf2
         cd ../
         rm -rf build
