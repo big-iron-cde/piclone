@@ -17,7 +17,7 @@ jobs:
       matrix:
         board: [pico, pico_w, pico2, pico2_w]
     steps:
-    - uses: actions/checkout@v4.1.7
+    - uses: actions/checkout@v7.0.0
       with:
         fetch-depth: 0
 
