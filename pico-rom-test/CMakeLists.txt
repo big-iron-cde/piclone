@@ -32,6 +32,7 @@ target_link_libraries(pico-rom-test
     hardware_gpio
     hardware_clocks
     hardware_sync
+    pico_cyw43_arch_none
 )
 
 pico_add_extra_outputs(pico-rom-test)
