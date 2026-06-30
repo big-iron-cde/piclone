@@ -49,6 +49,12 @@ static uint16_t seq_counter      = 1;
 
 // ─── Pin setup ───────────────────────────────────────────────────────────
 
+#ifdef PICO_DEFAULT_LED_PIN
+    const uint LED_PIN = PICO_DEFAULT_LED_PIN;
+#elif defined(CYW43_WL_GPIO_LED_PIN)
+    #include "pico/cyw43_arch.h"
+#endif
+
 static void pins_init(void) {
     for (int p = PIN_A_FIRST; p <= PIN_A_LAST; p++) {
         gpio_init(p);
@@ -209,8 +215,15 @@ int main(void) {
     };
     hardware_api_init(&ctx);
 
-    gpio_init(PICO_DEFAULT_LED_PIN);
-    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    #if defined(CYW43_WL_GPIO_LED_PIN)
+        if (cyw43_arch_init()) {
+            return 1;
+        }
+        uint PICO_DEFAULT_LED_PIN = CYW43_WL_GPIO_LED_PIN;
+    #elif defined(PICO_DEFAULT_LED_PIN)
+        gpio_init(PICO_DEFAULT_LED_PIN);
+        gpio_set_dir(LED_PIN, GPIO_OUT);
+    #endif
 
     absolute_time_t led_toggle = get_absolute_time();
     bool led_on = false;

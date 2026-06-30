@@ -27,11 +27,19 @@ target_include_directories(pico-rom-test PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/third_party/cJSON
 )
 
-target_link_libraries(pico-rom-test
+set(STD_LIBS
     pico_stdlib
     hardware_gpio
     hardware_clocks
     hardware_sync
+)
+
+if(PICO_BOARD STREQUAL "pico_w" OR PICO_BOARD STREQUAL "pico2_w")
+    list(APPEND STD_LIBS pico_cyw43_arch_none)
+endif()
+
+target_link_libraries(pico-rom-test
+   PRIVATE ${STD_LIBS}
 )
 
 pico_add_extra_outputs(pico-rom-test)
