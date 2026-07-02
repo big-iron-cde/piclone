@@ -34,11 +34,11 @@ jobs:
 
     - name: Build for Each Pico
       run: |
-        cd pico-rom-test
+        cd src
         mkdir -p build && cd build
         cmake .. -DPICO_BOARD=${{ matrix.board }}
         make
-        cp pico-rom-test.uf2 ../../bin/pico-rom-test-${{ matrix.board }}.uf2
+        cp piclone.uf2 ../../bin/piclone-${{ matrix.board }}.uf2
         cd ../
         rm -rf build
         
@@ -47,7 +47,7 @@ jobs:
       uses: softprops/action-gh-release@v3
       with:
         files: |
-          bin/pico-rom-test-${{ matrix.board }}.uf2
+          bin/piclone-${{ matrix.board }}.uf2
         make_latest: true
 
     env:
