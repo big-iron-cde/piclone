@@ -1,4 +1,4 @@
-"""Build a 32 KB ROM image for the Pico-as-ROM 65C02 system.
+"""Build a 32 KB ROM image for the Piclone 65C02 system.
 
 The 32 KB image maps to CPU addresses $8000-$FFFF.
 File offset $0000 = CPU address $8000

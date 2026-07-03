@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hardware_api.py — Host-side Hardware API for Pico-as-ROM.
+hardware_api.py — Host-side Hardware API for Piclone.
 
 Framed serial protocol:
     ENQ → STX → ACK → payload → EOT → ACK/NACK

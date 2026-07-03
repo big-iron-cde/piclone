@@ -23,7 +23,7 @@ Symptoms seen during bring-up and their likely causes.
 |---|---|
 | `upload-rom.py`: Device or resource busy | Another program holds the serial port — close serial monitors first |
 | `ProtocolError: expected ACK … got 0x7C` | ASCII **monitor** still enabled — run `api.monitor(enable=False)` or use `--read-stp`; reflash if firmware is stale |
-| `ProtocolError: device NACK after EOT (0x15)` | Stale or mismatched firmware — rebuild and reflash `pico-rom-test.uf2` (`picotool load -f`) |
+| `ProtocolError: device NACK after EOT (0x15)` | Stale or mismatched firmware — rebuild and reflash `piclone.uf2` (`picotool load -f`) |
 | `ProtocolError` / timeout (other) | Wrong port, no firmware flashed, or a plain serial monitor is open on the port |
 | `TimeoutError` during `--read-stp` | ROM missing **`STP` (`0xDB`)** at end of program, or clock slower than 12 s/frame — rebuild with `build-rom.py` or raise `frame_timeout` in `read_until_stp()` |
-| `ModuleNotFoundError: hardware_api` | Run host scripts from **`rom-builder/`**, not from `pico-rom-test/build/` |
+| `ModuleNotFoundError: hardware_api` | Run host scripts from **`rom-builder/`**, not from `piclone/build/` |

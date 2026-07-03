@@ -1,6 +1,6 @@
 # Host Tools
 
-Host tools live in [`rom-builder/`](https://github.com/big-iron-cde/PICO-ROM/tree/main/rom-builder)
+Host tools live in [`rom-builder/`](https://github.com/big-iron-cde/piclone/tree/main/rom-builder)
 at the repository root. Install the one dependency once:
 
 ```bash
@@ -54,11 +54,11 @@ they are summarized here with links to source.
 
 ### Scripts
 
-- [`build-rom.py`](https://github.com/big-iron-cde/PICO-ROM/blob/main/rom-builder/build-rom.py)
+- [`build-rom.py`](https://github.com/big-iron-cde/piclone/blob/main/rom-builder/build-rom.py)
   — assembles a 32 KB ROM image into `bin/rom.bin`. Key helpers: `cpu_to_offset()` maps a
   CPU address (`$8000–$FFFF`) to a file offset, and `write_bytes()` writes one or more
   bytes at a CPU address and returns the next address for chaining.
-- [`upload-rom.py`](https://github.com/big-iron-cde/PICO-ROM/blob/main/rom-builder/upload-rom.py)
+- [`upload-rom.py`](https://github.com/big-iron-cde/piclone/blob/main/rom-builder/upload-rom.py)
   — CLI wrapper: `python3 upload-rom.py [PORT] [BIN]`, with `--read-stp` to upload, reset,
   and capture bus cycles until `STP`.
 

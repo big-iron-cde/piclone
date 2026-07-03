@@ -12,11 +12,11 @@
 5. **Check no short** between the +3.3 V rail and GND rail.
 6. **Power the breadboard** (external 3.3 V). Measure 3.3 V at 65C02 pin 8 and RAM pin 28.
    Do **not** connect external 3.3 V to Pico VSYS yet.
-7. **Flash `pico-rom-test.uf2`**, plug in USB (Pico only), tie Pico GND to breadboard GND.
+7. **Flash `piclone.uf2`**, plug in USB (Pico only), tie Pico GND to breadboard GND.
 
 ## Bring-up sequence
 
-1. **Wire per [Wiring](wiring.md)**, flash `pico-rom-test.uf2`, connect USB (Pico) +
+1. **Wire per [Wiring](wiring.md)**, flash `piclone.uf2`, connect USB (Pico) +
    external 3.3 V (breadboard), common GND.
 2. **Install host tools** — `pip install --user pyserial`.
 3. **Dumb-ROM test** (no upload needed after a fresh boot): plug in USB — the built-in demo

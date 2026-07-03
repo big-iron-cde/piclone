@@ -1,18 +1,18 @@
-# Pico-as-ROM
+# Piclone
 
 > A Raspberry Pi Pico 2 acts as the **ROM and clock** for a real **W65C02S** CPU on a breadboard — single 3.3 V logic, no EPROM, no oscillator can, no level shifters.
 
-[![Docs](https://github.com/big-iron-cde/PICO-ROM/actions/workflows/docs.yml/badge.svg)](https://big-iron-cde.github.io/PICO-ROM/docs)
-[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://big-iron-cde.github.io/PICO-ROM/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/big-iron-cde/PICO-ROM/LICENSE)
+[![Docs](https://github.com/big-iron-cde/piclone/actions/workflows/docs.yml/badge.svg)](https://big-iron-cde.github.io/piclone/)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://big-iron-cde.github.io/piclone/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/big-iron-cde/piclone/blob/main/LICENSE)
 
 The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus in real time, generates the PHI2 clock, and drives RESET. A host PC builds ROM images and talks to the Pico over a framed USB-serial **Hardware API** to upload ROMs and capture bus cycles for automated testing.
 
-**Full documentation (wiring reference, firmware internals, API):** **<https://big-iron-cde.github.io/PICO-ROM/>**
+**Full documentation (wiring reference, firmware internals, API):** **<https://big-iron-cde.github.io/piclone/>**
 
 ## Table of Contents
 
-- [Pico-as-ROM](#pico-as-rom)
+- [Piclone](#piclone)
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Architecture](#architecture)
@@ -98,7 +98,7 @@ When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the P
 
 ## Wiring
 
-This is the minimum wiring to reproduce the build. For the full per-chip pin-by-pin maps (40-pin W65C02S, 28-pin HM62256) and the complete Pico GPIO allocation, see the [hardware reference](https://big-iron-cde.github.io/PICO-ROM/hardware/pinout.html).
+This is the minimum wiring to reproduce the build. For the full per-chip pin-by-pin maps (40-pin W65C02S, 28-pin HM62256) and the complete Pico GPIO allocation, see the [hardware reference](https://big-iron-cde.github.io/piclone/hardware/pinout.html).
 
 ### Board layout
 
@@ -191,7 +191,7 @@ The same address and data bus continues from the 65C02 to the HM62256 RAM (orang
 Build the Pico firmware:
 
 ```bash
-cd pico-rom-test
+cd piclone
 mkdir -p build && cd build
 cmake ..
 make
@@ -233,7 +233,7 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 > [!IMPORTANT]
 > Don't open a plain serial monitor on the port while using the Hardware API, and disable `monitor` before scripted upload/read — unstructured output corrupts framing. Use `--read-stp`, which disables it automatically.
 
-Full protocol and command reference: [Hardware API docs](https://big-iron-cde.github.io/PICO-ROM/hardware-api.html).
+Full protocol and command reference: [Hardware API docs](https://big-iron-cde.github.io/piclone/hardware-api.html).
 
 ## Examples
 
@@ -273,21 +273,21 @@ python3 upload-rom.py --read-stp
 
 ## Deployment
 
-Flash `pico-rom-test/build/pico-rom-test.uf2` to the Pico:
+Flash `piclone/build/piclone.uf2` to the Pico:
 
 - **BOOTSEL:** hold BOOTSEL, plug in USB, drag the `.uf2` onto the mass-storage drive.
 - **picotool** (device already running firmware):
 
 ```bash
-cd pico-rom-test/build
-picotool load -f pico-rom-test.uf2
+cd piclone/build
+picotool load -f piclone.uf2
 ```
 
 ## Project Structure
 
 ```
-PICO-ROM/
-├── pico-rom-test/        # Pico firmware (C, pico-sdk)
+piclone/
+├── piclone/              # Pico firmware (C, pico-sdk)
 │   ├── main.c            # pin setup, PHI2 clock, ROM emulation loop
 │   ├── hardware_api.c/.h # JSON command handling over framed serial
 │   └── protocol.c/.h     # ENQ/STX/ACK/EOT/NACK framing
@@ -300,11 +300,11 @@ PICO-ROM/
 ```
 
 > [!NOTE]
-> `pico-u2f/` in this repository is a separate, unrelated FIDO U2F project and is not part of Pico-as-ROM.
+> `pico-u2f/` in this repository is a separate, unrelated FIDO U2F project and is not part of Piclone.
 
 ## Documentation Website
 
-The complete documentation — full wiring reference, firmware internals (Doxygen), the Hardware API protocol, and host-tool API — is published at **<https://big-iron-cde.github.io/PICO-ROM/>**.
+The complete documentation — full wiring reference, firmware internals (Doxygen), the Hardware API protocol, and host-tool API — is published at **<https://big-iron-cde.github.io/piclone/>**.
 
 Build it locally:
 
@@ -328,7 +328,7 @@ Contributions are welcome. Please open an issue to discuss substantial changes f
 
 ## License
 
-Released under the [MIT License](https://github.com/big-iron-cde/PICO-ROM/blob/main/LICENSE).
+Released under the [MIT License](https://github.com/big-iron-cde/piclone/blob/main/LICENSE).
 
 ## Authors & Acknowledgements
 

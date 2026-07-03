@@ -1,12 +1,12 @@
-# Doxygen configuration for the Pico-as-ROM firmware (C).
+# Doxygen configuration for the Piclone firmware (C).
 # Generates XML for Breathe; HTML output is left to Sphinx.
 
-PROJECT_NAME           = "Pico-as-ROM Firmware"
+PROJECT_NAME           = "Piclone Firmware"
 PROJECT_BRIEF          = "Pico-hosted ROM, clock, and Hardware API for the W65C02S"
 OUTPUT_DIRECTORY       = _doxygen
 
 # Sources: firmware only.
-INPUT                  = ../pico-rom-test
+INPUT                  = ../piclone
 FILE_PATTERNS          = *.c *.h
 RECURSIVE              = YES
 

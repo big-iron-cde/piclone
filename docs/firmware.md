@@ -1,6 +1,6 @@
 # Firmware
 
-The firmware lives in [`pico-rom-test/`](https://github.com/big-iron-cde/PICO-ROM/tree/main/pico-rom-test)
+The firmware lives in [`piclone/`](https://github.com/big-iron-cde/piclone/tree/main/piclone)
 and is built with the Raspberry Pi Pico SDK.
 
 ## What it does (auto-run)
@@ -23,13 +23,13 @@ and is built with the Raspberry Pi Pico SDK.
 ## Build
 
 ```bash
-cd pico-rom-test
+cd piclone
 mkdir -p build && cd build
 cmake ..
 make
 ```
 
-The build produces `pico-rom-test.uf2`. See [Host Tools](host-tools.md) for flashing and
+The build produces `piclone.uf2`. See [Host Tools](host-tools.md) for flashing and
 uploading ROMs.
 
 ## C API reference (Doxygen)
@@ -39,11 +39,11 @@ The following is generated from the firmware sources by Doxygen and rendered via
 ### Hardware API (`hardware_api.h`)
 
 ```{doxygenfile} hardware_api.h
-:project: pico-rom
+:project: piclone
 ```
 
 ### Serial framing (`protocol.h`)
 
 ```{doxygenfile} protocol.h
-:project: pico-rom
+:project: piclone
 ```
