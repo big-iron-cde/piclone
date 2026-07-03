@@ -1,0 +1,56 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+    
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [pico, pico_w, pico2, pico2_w]
+    steps:
+    - uses: actions/checkout@v7.0.0
+      with:
+        fetch-depth: 0
+
+    - name: Clone repo to ~/tools/pico-sdk
+      run: git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git /home/runner/tools/pico-sdk
+
+    - name: Install ARM cross-compiler
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-arm-none-eabi
+    
+    - name: Create bin output folder
+      run: mkdir -p bin
+
+    - name: Build for Each Pico
+      run: |
+        cd src
+        mkdir -p build && cd build
+        cmake .. -DPICO_BOARD=${{ matrix.board }}
+        make
+        cp piclone.uf2 ../../bin/piclone-${{ matrix.board }}.uf2
+        cd ../
+        rm -rf build
+        
+    - name: Create release
+      id: create-release
+      uses: softprops/action-gh-release@v3
+      with:
+        files: |
+          bin/piclone-${{ matrix.board }}.uf2
+        make_latest: true
+
+    env:
+      PICO_SDK_PATH: /home/runner/tools/pico-sdk
+
+

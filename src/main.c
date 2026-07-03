@@ -1,5 +1,5 @@
 /*
- * piclone — Piclone firmware for the breadboard 6502 prototype
+ * pico-rom-test — Pico-as-ROM firmware for the breadboard 6502 prototype
  *
  * Hardware API over USB-CDC (framed serial):
  *   ENQ → STX → ACK → JSON payload → EOT → ACK/NACK
@@ -48,6 +48,12 @@ static float    current_hz       = 0.2f;
 static uint16_t seq_counter      = 1;
 
 // ─── Pin setup ───────────────────────────────────────────────────────────
+
+#ifdef PICO_DEFAULT_LED_PIN
+    const uint LED_PIN = PICO_DEFAULT_LED_PIN;
+#elif defined(CYW43_WL_GPIO_LED_PIN)
+    #include "pico/cyw43_arch.h"
+#endif
 
 static void pins_init(void) {
     for (int p = PIN_A_FIRST; p <= PIN_A_LAST; p++) {
@@ -187,9 +193,9 @@ static void rom_task(void) {
 // ─── Main loop ──────────────────────────────────────────────────────────
 
 static void print_banner(void) {
-    printf("\n=== piclone — Hardware API ===\n");
+    printf("\n=== pico-rom-test — Hardware API ===\n");
     printf("Protocol: ENQ STX ACK JSON EOT ACK\n");
-    printf("Commands: reset, upload_rom, read, request_addr, monitor\n");
+    printf("Commands: reset, upload_rom, read, request_addr, monitor, status (v1 JSON)\n");
     printf("65C02 clock: %.1f Hz  ROM: ON\n", current_hz);
     stdio_flush();
 }
@@ -209,8 +215,15 @@ int main(void) {
     };
     hardware_api_init(&ctx);
 
-    gpio_init(PICO_DEFAULT_LED_PIN);
-    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    #if defined(CYW43_WL_GPIO_LED_PIN)
+        if (cyw43_arch_init()) {
+            return 1;
+        }
+        uint PICO_DEFAULT_LED_PIN = CYW43_WL_GPIO_LED_PIN;
+    #elif defined(PICO_DEFAULT_LED_PIN)
+        gpio_init(PICO_DEFAULT_LED_PIN);
+        gpio_set_dir(LED_PIN, GPIO_OUT);
+    #endif
 
     absolute_time_t led_toggle = get_absolute_time();
     bool led_on = false;
