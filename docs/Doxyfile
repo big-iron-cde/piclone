@@ -6,7 +6,7 @@ PROJECT_BRIEF          = "Pico-hosted ROM, clock, and Hardware API for the W65C0
 OUTPUT_DIRECTORY       = _doxygen
 
 # Sources: firmware only.
-INPUT                  = ../piclone
+INPUT                  = ../src
 FILE_PATTERNS          = *.c *.h
 RECURSIVE              = YES
 

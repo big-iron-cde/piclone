@@ -1,7 +1,8 @@
 # Firmware
 
-The firmware lives in [`piclone/`](https://github.com/big-iron-cde/piclone/tree/main/piclone)
-and is built with the Raspberry Pi Pico SDK.
+The firmware lives in [`src/`](https://github.com/big-iron-cde/piclone/tree/main/src)
+and is built with the Raspberry Pi Pico SDK. It targets the **Pico 2** (`PICO_BOARD=pico2`)
+and bundles a small JSON parser (cJSON) for the v1 Hardware API.
 
 ## What it does (auto-run)
 
@@ -23,13 +24,15 @@ and is built with the Raspberry Pi Pico SDK.
 ## Build
 
 ```bash
-cd piclone
+export PICO_SDK_PATH=~/vsarm/pico-sdk   # your SDK checkout path
+cd src
 mkdir -p build && cd build
 cmake ..
 make
 ```
 
-The build produces `piclone.uf2`. See [Host Tools](host-tools.md) for flashing and
+The build produces `build/piclone.uf2`. The project bundles `pico_sdk_import.cmake`, so no
+separate SDK-import step is needed. See [Host Tools](host-tools.md) for flashing and
 uploading ROMs.
 
 ## C API reference (Doxygen)

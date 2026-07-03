@@ -1,10 +1,10 @@
 /*
- * pico-rom-test — Pico-as-ROM firmware for the breadboard 6502 prototype
+ * piclone — Pico-as-ROM firmware for the breadboard 6502 prototype
  *
  * Hardware API over USB-CDC (framed serial):
  *   ENQ → STX → ACK → JSON payload → EOT → ACK/NACK
  *
- * Commands: reset, upload_rom, read (until STP), request_addr, monitor
+ * Commands: reset, upload_rom, read (until STP), request_addr, monitor, status
  *
  * On USB connect the firmware auto-starts clock, ROM emulation, and RESET.
  */
@@ -193,7 +193,7 @@ static void rom_task(void) {
 // ─── Main loop ──────────────────────────────────────────────────────────
 
 static void print_banner(void) {
-    printf("\n=== pico-rom-test — Hardware API ===\n");
+    printf("\n=== piclone — Hardware API ===\n");
     printf("Protocol: ENQ STX ACK JSON EOT ACK\n");
     printf("Commands: reset, upload_rom, read, request_addr, monitor, status (v1 JSON)\n");
     printf("65C02 clock: %.1f Hz  ROM: ON\n", current_hz);
