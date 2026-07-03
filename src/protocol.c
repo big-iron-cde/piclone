@@ -110,35 +110,3 @@ bool proto_send_frame(const uint8_t *payload, size_t len) {
     stdio_flush();
     return wait_host_ack(3000);
 }
-
-bool proto_read_binary_frame(uint8_t *buf, size_t expected_len) {
-    uint8_t b;
-    if (!proto_read_byte(&b, 3000) || b != CTRL_ENQ) {
-        return false;
-    }
-    if (!wait_for_stx(3000)) {
-        return false;
-    }
-    if (!proto_send_ack()) {
-        return false;
-    }
-
-    size_t n = 0;
-    absolute_time_t deadline = make_timeout_time_ms(30000);
-    while (n < expected_len) {
-        int c = getchar_timeout_us(0);
-        if (c == PICO_ERROR_TIMEOUT) {
-            if (absolute_time_diff_us(get_absolute_time(), deadline) <= 0) {
-                return false;
-            }
-            continue;
-        }
-        deadline = make_timeout_time_ms(30000);
-        buf[n++] = (uint8_t)c;
-    }
-
-    if (!proto_read_byte(&b, 3000) || b != CTRL_EOT) {
-        return false;
-    }
-    return proto_send_ack();
-}
