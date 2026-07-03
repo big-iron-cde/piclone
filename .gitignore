@@ -185,3 +185,6 @@ cscope.*
 tmp/
 temp/
 *.tmp
+
+# Doxygen output if run from repo root
+/_doxygen/

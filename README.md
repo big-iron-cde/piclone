@@ -60,7 +60,7 @@ flowchart LR
     CPU["W65C02S CPU"]
     Pico["Raspberry Pi Pico 2<br/>(ROM + clock + reset)"]
     RAM["HM62256 SRAM"]
-    Host["Host PC<br/>(rom-builder)"]
+    Host["Host PC<br/>(Romulan)"]
 
     CPU <-->|"A0-A15 / D0-D7 bus"| Pico
     CPU <-->|"A0-A14 / D0-D7 bus"| RAM
@@ -181,54 +181,59 @@ The same address and data bus continues from the 65C02 to the HM62256 RAM (orang
 
 ## Prerequisites
 
-- [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) + ARM GCC toolchain
-- [CMake](https://cmake.org/) ≥ 3.13 and `make`
+- [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) + ARM GCC toolchain (set `PICO_SDK_PATH`)
+- [CMake](https://cmake.org/) ≥ 3.13 and `make` — firmware targets the **Pico 2** (`PICO_BOARD=pico2`)
 - [picotool](https://github.com/raspberrypi/picotool) (optional, for flashing without BOOTSEL)
-- Python 3.8+ and [`pyserial`](https://pypi.org/project/pyserial/)
+- Python 3.8+ and [uv](https://github.com/astral-sh/uv) for the [Romulan](https://github.com/big-iron-cde/romulan) host client
 
 ## Installation
 
-Build the Pico firmware:
+Build the Pico firmware (requires `PICO_SDK_PATH` and `arm-none-eabi-gcc`):
 
 ```bash
-cd piclone
+export PICO_SDK_PATH=~/vsarm/pico-sdk   # your SDK checkout path
+cd src
 mkdir -p build && cd build
 cmake ..
 make
 ```
 
-Install the host-side Python dependency:
+The project bundles `pico_sdk_import.cmake`, so no separate SDK-import step is needed. Output: `build/piclone.uf2`.
+
+Set up the [Romulan](https://github.com/big-iron-cde/romulan) host client (a sibling checkout of this repo):
 
 ```bash
-pip install --user pyserial
+cd ~/Downloads/romulan
+uv sync
 ```
 
 ## Usage
 
 1. **Flash the firmware** — see [Deployment](#deployment). On USB connect the Pico auto-starts the clock, ROM emulation, and releases RESET; the built-in demo runs immediately.
-2. **Build a ROM image** and upload it:
+2. **Build a ROM image and upload it** with Romulan:
 
 ```bash
-cd rom-builder
-python3 build-rom.py                 # → bin/rom.bin (32 KB)
-python3 upload-rom.py                 # upload via Hardware API
-python3 upload-rom.py --read-stp      # upload, reset, capture bus until STP
+cd ~/Downloads/romulan
+uv run romulan program.txt --build --upload                 # assemble + upload via Hardware API
+uv run romulan hardware upload bin/rom.bin --port /dev/ttyACM0
+uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
 ```
 
 > [!NOTE]
-> `rom_image[]` lives in SRAM and is lost on Pico power-cycle — re-run `upload-rom.py` after each reboot.
+> `rom_image[]` lives in SRAM and is lost on Pico power-cycle — re-upload after each reboot.
 
 ## Hardware API
 
-The host talks to the Pico over USB-CDC at **115200 baud** using a framed protocol. Each transaction is `ENQ → STX → ACK → payload → EOT → ACK/NACK`; payloads are JSON (except the binary ROM upload).
+The host talks to the Pico over USB-CDC at **115200 baud** using a framed protocol. Each transaction is `ENQ → STX → ACK → payload → EOT → ACK/NACK`; **all payloads are JSON with `"v":1`** (including the chunked, base64-encoded ROM upload). An optional `"id"` is echoed in responses.
 
 | Command | Request | Response |
 |---|---|---|
-| `reset` | `{"cmd":"reset","assert":true}` | `{"ok":true,"asserted":true}` |
-| `upload_rom` | `{"cmd":"upload_rom","size":32768}` + 32768-byte binary frame | `{"ok":true,"bytes":32768,"reset_vector":"8000"}` |
-| `read` | `{"cmd":"read","until":"stp","max_cycles":10000}` | streams `{"type":"cycle",...}` then `{"type":"done",...}` |
-| `request_addr` | `{"cmd":"request_addr"}` | `{"ok":true,"addr":"4000","phi2_hz":0.2}` |
-| `monitor` | `{"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
+| `reset` | `{"v":1,"cmd":"reset","assert":true}` | `{"v":1,"ok":true,"asserted":true}` |
+| `upload_rom` | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; `commit` returns `reset_vector` |
+| `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | event stream then `{"type":"event","event":"done",...}` |
+| `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":0.2}` |
+| `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
+| `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
 
 > [!IMPORTANT]
 > Don't open a plain serial monitor on the port while using the Hardware API, and disable `monitor` before scripted upload/read — unstructured output corrupts framing. Use `--read-stp`, which disables it automatically.
@@ -237,16 +242,16 @@ Full protocol and command reference: [Hardware API docs](https://big-iron-cde.gi
 
 ## Examples
 
-Drive the device from Python:
+Drive the device from Python using Romulan's client:
 
 ```python
-from hardware_api import HardwareAPI
+from romulan.hardware_api import HardwareAPI
 
 with HardwareAPI("/dev/ttyACM0") as api:
-    print(api.request_addr())
+    print(api.status())
 
     api.reset(assert_reset=True)                       # hold CPU in reset
-    api.upload_rom_json(open("bin/rom.bin", "rb").read())
+    api.upload_rom(open("bin/rom.bin", "rb").read())   # chunked, base64-encoded upload
     api.reset(assert_reset=False)                      # release → run
 
     capture = api.read_until_stp(max_cycles=500)       # disables monitor; ~12 s/frame
@@ -256,7 +261,7 @@ with HardwareAPI("/dev/ttyACM0") as api:
 A captured bus cycle looks like:
 
 ```json
-{"type":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
+{"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
 ```
 
 ## Testing
@@ -264,22 +269,22 @@ A captured bus cycle looks like:
 Automated tests use the JSON bus-cycle stream. End the ROM with a `STP` (`0xDB`) instruction so capture stops deterministically:
 
 ```bash
-cd rom-builder
-python3 build-rom.py            # demo program already ends in STP
-python3 upload-rom.py --read-stp
+cd ~/Downloads/romulan
+uv run romulan program.txt --build --upload             # demo program ends in STP
+uv run romulan hardware capture --until stp --port /dev/ttyACM0
 ```
 
 `read_until_stp()` captures one frame per PHI2 rising edge until the CPU fetches `STP` or `max_cycles` is reached. At the default 0.2 Hz clock, frames arrive ~every 5 s (host waits up to 12 s/frame).
 
 ## Deployment
 
-Flash `piclone/build/piclone.uf2` to the Pico:
+Flash `src/build/piclone.uf2` to the Pico:
 
 - **BOOTSEL:** hold BOOTSEL, plug in USB, drag the `.uf2` onto the mass-storage drive.
 - **picotool** (device already running firmware):
 
 ```bash
-cd piclone/build
+cd src/build
 picotool load -f piclone.uf2
 ```
 
@@ -287,20 +292,19 @@ picotool load -f piclone.uf2
 
 ```
 piclone/
-├── piclone/              # Pico firmware (C, pico-sdk)
+├── src/                  # Pico firmware (C, pico-sdk)
 │   ├── main.c            # pin setup, PHI2 clock, ROM emulation loop
-│   ├── hardware_api.c/.h # JSON command handling over framed serial
-│   └── protocol.c/.h     # ENQ/STX/ACK/EOT/NACK framing
-├── rom-builder/          # Host tools (Python)
-│   ├── build-rom.py      # assemble a 32 KB ROM image → bin/rom.bin
-│   ├── upload-rom.py     # upload + optional STP capture
-│   └── hardware_api.py   # HardwareAPI client library
+│   ├── hardware_api.c/.h # v1 JSON command handling over framed serial
+│   ├── protocol.c/.h     # ENQ/STX/ACK/EOT/NACK framing
+│   ├── json_util.c/.h    # JSON payload helpers (cJSON wrapper)
+│   ├── pico_sdk_import.cmake
+│   └── third_party/cJSON # bundled JSON parser
 ├── docs/                 # Documentation website (Sphinx + Doxygen)
 └── README.md
 ```
 
 > [!NOTE]
-> `pico-u2f/` in this repository is a separate, unrelated FIDO U2F project and is not part of Piclone.
+> ROM building and host-side control live in the separate [Romulan](https://github.com/big-iron-cde/romulan) repository — see [Host tools](https://big-iron-cde.github.io/piclone/host-tools.html).
 
 ## Documentation Website
 

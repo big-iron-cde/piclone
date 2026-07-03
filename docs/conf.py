@@ -1,19 +1,16 @@
 """Sphinx configuration for the Piclone documentation website.
 
 Combines:
-  * Doxygen (C firmware) via Breathe
-  * Python host-tool API via autodoc
+  * Doxygen (C firmware in src/) via Breathe
   * Prose written in MyST Markdown
+
+Host-side control lives in the separate Romulan repository, so it is documented
+as prose (see host-tools.md) rather than via autodoc.
 """
 
-import os
-import sys
 from pathlib import Path
 
-# Make the Python host tools importable for autodoc.
 DOCS_DIR = Path(__file__).resolve().parent
-REPO_ROOT = DOCS_DIR.parent
-sys.path.insert(0, str(REPO_ROOT / "rom-builder"))
 
 # -- Project information -----------------------------------------------------
 
@@ -27,9 +24,6 @@ release = "0.1"
 extensions = [
     "breathe",
     "myst_parser",
-    "sphinx.ext.autodoc",
-    "sphinx.ext.napoleon",
-    "sphinx.ext.viewcode",
     "sphinxcontrib.mermaid",
 ]
 
@@ -53,13 +47,6 @@ exclude_patterns = ["_build", "_doxygen", "Thumbs.db", ".DS_Store"]
 breathe_projects = {"piclone": str(DOCS_DIR / "_doxygen" / "xml")}
 breathe_default_project = "piclone"
 breathe_domain_by_extension = {"h": "c", "c": "c"}
-
-# -- autodoc -----------------------------------------------------------------
-
-# pyserial is an optional runtime import in hardware_api; mock it so docs build
-# without the dependency present on the build machine.
-autodoc_mock_imports = ["serial"]
-autodoc_member_order = "bysource"
 
 # -- HTML output -------------------------------------------------------------
 

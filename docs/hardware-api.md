@@ -1,8 +1,9 @@
 # Hardware API
 
 The host talks to the Pico over USB-CDC at **115200 baud** using a framed serial protocol.
-Payloads are JSON (except the ROM binary upload). This is designed for scripted bring-up
-and CI.
+**All payloads are JSON with `"v":1`** — including the chunked, base64-encoded ROM upload.
+An optional `"id"` is echoed back in the matching response. This is designed for scripted
+bring-up and CI.
 
 ## Framing
 
@@ -36,16 +37,17 @@ disable it or start a **`read`** capture (which auto-disables it).
 
 ## Commands
 
-All commands are JSON sent in a framed payload (host → Pico). The Pico responds with a
-framed JSON payload (Pico → host).
+All commands are JSON sent in a framed payload (host → Pico), and every request includes
+`"v":1`. The Pico responds with a framed JSON payload (Pico → host).
 
 | Command | Request | Response |
 |---|---|---|
-| **reset** | `{"cmd":"reset","assert":true}` or `"assert":false` | `{"ok":true,"cmd":"reset","asserted":true}` |
-| **upload_rom** | `{"cmd":"upload_rom","size":32768}` then a **binary frame** (32768 raw bytes) | `{"ok":true,"cmd":"upload_rom","bytes":32768,"reset_vector":"8000"}` |
-| **read** | `{"cmd":"read","until":"stp","max_cycles":10000}` | streams `{"type":"cycle",...}` then `{"type":"done","reason":"stp",...}` |
-| **request_addr** | `{"cmd":"request_addr"}` | `{"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":0.2}` |
-| **monitor** | `{"cmd":"monitor","enable":true}` | enables/disables the ASCII bus table (off by default) |
+| **reset** | `{"v":1,"cmd":"reset","assert":true}` or `"assert":false` | `{"v":1,"ok":true,"cmd":"reset","asserted":true}` |
+| **upload_rom** | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; `commit` returns `reset_vector` |
+| **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | event stream then `{"type":"event","event":"done",...}` |
+| **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":0.2}` |
+| **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the ASCII bus table (off by default) |
+| **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
 
 ### reset
 
@@ -54,39 +56,47 @@ reset, `"assert":false` to let it run.
 
 ### upload_rom
 
-A two-step transfer:
+A JSON-only chunked transfer (1476 raw bytes per chunk, base64-encoded):
 
-1. Send the JSON command frame; the Pico replies `{"ok":true,"awaiting":32768}`.
-2. Send a binary frame containing exactly 32768 bytes.
+1. `{"v":1,"cmd":"upload_rom","action":"begin","size":32768}`
+2. `{"v":1,"cmd":"upload_rom","action":"chunk","offset":0,"data":"<base64>"}` — repeat until
+   all 32 KB have been sent.
+3. `{"v":1,"cmd":"upload_rom","action":"commit"}` → `{"v":1,"ok":true,"reset_vector":"8000",...}`
 
 RESET is asserted for the duration of the upload so the CPU cannot fetch half-written ROM
-data, then released automatically.
+data, then released on commit.
 
 ### read
 
-Captures bus activity as JSON. Streams one frame per PHI2 rising edge until the CPU
-**fetches STP** (`0xDB` on a read cycle) or `max_cycles` is reached. Each cycle frame:
+Captures bus activity as JSON. Streams one event per PHI2 rising edge until the CPU
+**fetches STP** (`0xDB` on a read cycle) or `max_cycles` is reached. Each cycle event:
 
 ```json
-{"type":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
+{"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
 ```
 
-Final frame:
+Final event:
 
 ```json
-{"type":"done","ok":true,"reason":"stp","cycles":14,"addr":"800D"}
+{"v":1,"type":"event","event":"done","ok":true,"reason":"stp","cycles":14,"addr":"800D"}
 ```
 
 To use this in automated tests, end your ROM with a **`STP` (`0xDB`)** instruction (not
-`BRK` — that opcode is `0x00`).
+`BRK` — that opcode is `0x00`). Starting a `read` automatically disables the ASCII monitor
+on the Pico.
 
-At the default **0.2 Hz** clock, cycle frames arrive about **once every 5 seconds**. The
-host waits up to **12 s** per frame (`READ_FRAME_TIMEOUT` in `hardware_api.py`). A full
-capture from reset through STP typically takes **10–120 s** depending on program length.
+At the default **0.2 Hz** clock, cycle events arrive about **once every 5 seconds**. The
+Romulan host client waits up to **12 s** per frame. A full capture from reset through STP
+typically takes **10–120 s** depending on program length.
 
 ### request_addr
 
 Returns the last address sampled on the bus (updated every PHI2 rising edge).
+
+### status
+
+Returns a full hardware snapshot — clock frequency, reset state, ROM active flag, and
+whether the ASCII monitor is enabled — in a single JSON response.
 
 ### monitor
 
