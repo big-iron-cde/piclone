@@ -2,7 +2,7 @@ name: docs
 
 on:
   push:
-    branches: [main, standard-readme]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -47,7 +47,7 @@ jobs:
 
   deploy:
     # Publish from main or the standard-readme working branch; PRs only build.
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/standard-readme'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:
