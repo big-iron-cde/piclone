@@ -98,6 +98,20 @@ ENV/
 .venv/
 
 # =============================================================================
+# Documentation build artifacts (Sphinx + Doxygen)
+# =============================================================================
+
+docs/_build/
+docs/_doxygen/
+
+# Root Doxygen output
+/html/
+/latex/
+
+# Local docs virtualenv
+.docs-venv/
+
+# =============================================================================
 # IDEs and editors
 # =============================================================================
 
@@ -171,3 +185,6 @@ cscope.*
 tmp/
 temp/
 *.tmp
+
+# Doxygen output if run from repo root
+/_doxygen/
