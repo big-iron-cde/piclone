@@ -3,6 +3,36 @@
 One place to look while wiring. For the per-chip pin diagrams, see
 [Pinout Reference](pinout.md).
 
+## Circuit diagrams
+
+Component placement on the breadboard, left to right: the **3.3 V supply**, the
+**HM62256 RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order
+makes the two wiring diagrams below easier to follow.
+
+![Breadboard layout: 3.3 V supply, RAM, 6502, and Pico placed left to right](../../media/circuitlayout.png)
+
+The full wiring is split into two diagrams because routing every net in a single view was
+unreadable. Both halves share the same 65C02 in the middle; together they form the complete
+circuit. In both, **red = +3.3 V rail** and **blue = GND rail**.
+
+### Diagram 1 — 65C02 ↔ Pico
+
+The Pico drives the address bus and the ROM data bus, plus RESET and PHI2 (the green wires).
+Purple wires are the shared A0–A15 / D0–D7 bus; the resistors are the 10 kΩ pull-ups on the
+65C02 control inputs.
+
+![Wiring diagram of the W65C02S connected to the Raspberry Pi Pico](../../media/picohalf_circuit.png)
+
+### Diagram 2 — 65C02 ↔ RAM
+
+The same address and data bus continues from the 65C02 to the HM62256 RAM (orange wires),
+with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on
+the right.
+
+![Wiring diagram of the W65C02S connected to the HM62256 RAM](../../media/ramhalf_circuit.png)
+
+The connection tables below list every net precisely.
+
 ## Bus connections (shared by 65C02, Pico, RAM)
 
 | Net | 65C02 pin | Pico pin (GP) | RAM pin |
