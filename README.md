@@ -18,7 +18,6 @@ The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus 
   - [Architecture](#architecture)
   - [Hardware](#hardware)
   - [Wiring](#wiring)
-    - [Board layout](#board-layout)
     - [Diagram 1 — 65C02 ↔ Pico](#diagram-1--65c02--pico)
     - [Diagram 2 — 65C02 ↔ RAM](#diagram-2--65c02--ram)
     - [Shared bus (65C02 ↔ Pico ↔ RAM)](#shared-bus-65c02--pico--ram)
@@ -98,13 +97,9 @@ When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the P
 
 ## Wiring
 
-This is the minimum wiring to reproduce the build. For the full per-chip pin-by-pin maps (40-pin W65C02S, 28-pin HM62256) and the complete Pico GPIO allocation, see the [hardware reference](https://big-iron-cde.github.io/piclone/hardware/pinout.html).
-
-### Board layout
-
 Component placement on the breadboard, left to right: the **3.3 V supply** (top-left), the **HM62256 RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order makes the two wiring diagrams below easier to follow.
 
-![Breadboard layout: 3.3 V supply, RAM, 6502, and Pico placed left to right](media/circuitlayout.png)
+![Breadboard layout: 3.3 V supply, RAM, 6502, and Pico placed left to right](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/circuitlayout.png)
 
 The full wiring is split into two diagrams because routing every net in a single view was unreadable. Both halves share the same 65C02 in the middle; together they form the complete circuit. In both, **red = +3.3 V rail** and **blue = GND rail**.
 
@@ -112,13 +107,13 @@ The full wiring is split into two diagrams because routing every net in a single
 
 The Pico drives the address bus and the ROM data bus, plus RESET and PHI2 (the green wires). Purple wires are the shared A0–A15 / D0–D7 bus; the resistors are the 10 kΩ pull-ups on the 65C02 control inputs.
 
-![Wiring diagram of the W65C02S connected to the Raspberry Pi Pico](media/picohalf_circuit.png)
+![Wiring diagram of the W65C02S connected to the Raspberry Pi Pico](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/picohalf_circuit.png)
 
 ### Diagram 2 — 65C02 ↔ RAM
 
 The same address and data bus continues from the 65C02 to the HM62256 RAM (orange wires), with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on the right.
 
-![Wiring diagram of the W65C02S connected to the HM62256 RAM](media/ramhalf_circuit.png)
+![Wiring diagram of the W65C02S connected to the HM62256 RAM](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/ramhalf_circuit.png)
 
 ### Shared bus (65C02 ↔ Pico ↔ RAM)
 
