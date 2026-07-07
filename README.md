@@ -18,6 +18,7 @@ The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus 
   - [Architecture](#architecture)
   - [Hardware](#hardware)
   - [Wiring](#wiring)
+    - [Board layout](#board-layout)
     - [Diagram 1 — 65C02 ↔ Pico](#diagram-1--65c02--pico)
     - [Diagram 2 — 65C02 ↔ RAM](#diagram-2--65c02--ram)
     - [Shared bus (65C02 ↔ Pico ↔ RAM)](#shared-bus-65c02--pico--ram)
@@ -96,6 +97,10 @@ When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the P
 **Not needed:** MOSFETs, oscillator can, bypass caps, level shifters.
 
 ## Wiring
+
+This is the minimum wiring to reproduce the build. For the full per-chip pin-by-pin maps (40-pin W65C02S, 28-pin HM62256) and the complete Pico GPIO allocation, see the [hardware reference](https://big-iron-cde.github.io/piclone/hardware/pinout.html).
+
+### Board layout
 
 Component placement on the breadboard, left to right: the **3.3 V supply** (top-left), the **HM62256 RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order makes the two wiring diagrams below easier to follow.
 
