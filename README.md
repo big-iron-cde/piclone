@@ -1,6 +1,6 @@
 # Piclone
 
-> A Raspberry Pi Pico 2 acts as the **ROM and clock** for a real **W65C02S** CPU on a breadboard — single 3.3 V logic, no EPROM, no oscillator can, no level shifters.
+> A Raspberry Pi Pico acts as the **ROM and clock** for a real **W65C02S** CPU on a breadboard — single 3.3 V logic, no EPROM, no oscillator can, no level shifters.
 
 [![Docs](https://github.com/big-iron-cde/piclone/actions/workflows/docs.yml/badge.svg)](https://big-iron-cde.github.io/piclone/)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://big-iron-cde.github.io/piclone/)
@@ -8,7 +8,7 @@
 
 The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus in real time, generates the PHI2 clock, and drives RESET. A host PC builds ROM images and talks to the Pico over a framed USB-serial **Hardware API** to upload ROMs and capture bus cycles for automated testing.
 
-**Full documentation (wiring reference, firmware internals, API):** **<https://big-iron-cde.github.io/piclone/>**
+**Full documentation (wiring reference, firmware internals, API):** **https://piclone.big-iron.dev**
 
 ## Table of Contents
 
