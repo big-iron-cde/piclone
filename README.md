@@ -8,7 +8,7 @@
 
 The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus in real time, generates the PHI2 clock, and drives RESET. A host PC builds ROM images and talks to the Pico over a framed USB-serial **Hardware API** to upload ROMs and capture bus cycles for automated testing.
 
-**Full documentation (wiring reference, firmware internals, API):** **<https://big-iron-cde.github.io/piclone/>**
+**Full documentation (wiring reference, firmware internals, API):** [piclone.big-iron.dev](https://piclone.big-iron.dev)
 
 ## Table of Contents
 
