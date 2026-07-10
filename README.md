@@ -194,7 +194,7 @@ Build the Pico firmware (requires `PICO_SDK_PATH` and `arm-none-eabi-gcc`):
 export PICO_SDK_PATH=~/vsarm/pico-sdk   # your SDK checkout path
 cd src
 mkdir -p build && cd build
-cmake ..
+cmake .. -DPICO_BOARD={BOARD_TYPE}
 make
 ```
 
@@ -206,6 +206,16 @@ Set up the [Romulan](https://github.com/big-iron-cde/romulan) host client (a sib
 cd ~/Downloads/romulan
 uv sync
 ```
+
+### Pico Board Types
+
+This software supports the Raspberry Pi Pico SoC. Pass the following valid values to the `-DBOARD_TYPE` argument in the `cmake` command
+depending on the board intended for use:
+
+* `pico`
+* `pico_w`
+* `pico2`
+* `pico2_w`
 
 ## Usage
 
