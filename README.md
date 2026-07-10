@@ -1,6 +1,6 @@
 # Piclone
 
-> A Raspberry Pi Pico 2 acts as the **ROM and clock** for a real **W65C02S** CPU on a breadboard — single 3.3 V logic, no EPROM, no oscillator can, no level shifters.
+> A Raspberry Pi Pico acts as the **ROM and clock** for a real **W65C02S** CPU on a breadboard — single 3.3 V logic, no EPROM, no oscillator can, no level shifters.
 
 [![Docs](https://github.com/big-iron-cde/piclone/actions/workflows/docs.yml/badge.svg)](https://big-iron-cde.github.io/piclone/)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://big-iron-cde.github.io/piclone/)
@@ -104,7 +104,7 @@ This is the minimum wiring to reproduce the build. For the full per-chip pin-by-
 
 Component placement on the breadboard, left to right: the **3.3 V supply** (top-left), the **HM62256 RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order makes the two wiring diagrams below easier to follow.
 
-![Breadboard layout: 3.3 V supply, RAM, 6502, and Pico placed left to right](media/circuitlayout.png)
+![Breadboard layout: 3.3 V supply, RAM, 6502, and Pico placed left to right](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/circuitlayout.png)
 
 The full wiring is split into two diagrams because routing every net in a single view was unreadable. Both halves share the same 65C02 in the middle; together they form the complete circuit. In both, **red = +3.3 V rail** and **blue = GND rail**.
 
@@ -112,13 +112,13 @@ The full wiring is split into two diagrams because routing every net in a single
 
 The Pico drives the address bus and the ROM data bus, plus RESET and PHI2 (the green wires). Purple wires are the shared A0–A15 / D0–D7 bus; the resistors are the 10 kΩ pull-ups on the 65C02 control inputs.
 
-![Wiring diagram of the W65C02S connected to the Raspberry Pi Pico](media/picohalf_circuit.png)
+![Wiring diagram of the W65C02S connected to the Raspberry Pi Pico](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/picohalf_circuit.png)
 
 ### Diagram 2 — 65C02 ↔ RAM
 
 The same address and data bus continues from the 65C02 to the HM62256 RAM (orange wires), with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on the right.
 
-![Wiring diagram of the W65C02S connected to the HM62256 RAM](media/ramhalf_circuit.png)
+![Wiring diagram of the W65C02S connected to the HM62256 RAM](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/ramhalf_circuit.png)
 
 ### Shared bus (65C02 ↔ Pico ↔ RAM)
 
@@ -194,7 +194,7 @@ Build the Pico firmware (requires `PICO_SDK_PATH` and `arm-none-eabi-gcc`):
 export PICO_SDK_PATH=~/vsarm/pico-sdk   # your SDK checkout path
 cd src
 mkdir -p build && cd build
-cmake ..
+cmake .. -DPICO_BOARD={BOARD_TYPE}
 make
 ```
 
@@ -206,6 +206,16 @@ Set up the [Romulan](https://github.com/big-iron-cde/romulan) host client (a sib
 cd ~/Downloads/romulan
 uv sync
 ```
+
+### Pico Board Types
+
+This software supports the Raspberry Pi Pico SoC. Pass the following valid values to the `-DBOARD_TYPE` argument in the `cmake` command
+depending on the board intended for use:
+
+* `pico`
+* `pico_w`
+* `pico2`
+* `pico2_w`
 
 ## Usage
 
