@@ -1,14 +1,14 @@
 # Hardware API
 
 The host talks to the Pico over USB-CDC at **115200 baud** using a framed serial protocol.
-**All payloads are JSON with `"v":1`** — including the chunked, base64-encoded ROM upload.
+**All payloads are JSON with `"v":1`:** including the chunked, base64-encoded ROM upload.
 An optional `"id"` is echoed back in the matching response. This is designed for scripted
 bring-up and CI.
 
 ## Framing
 
 Every transaction follows the same byte sequence. The **receiver** always sends ACK (or
-NACK on error) after EOT — whether the host or the Pico is sending:
+NACK on error) after EOT, whether the host or the Pico is sending:
 
 ```
 Sender                         Receiver
@@ -29,7 +29,7 @@ Sender                         Receiver
 | NACK | `0x15` | Rejected (bad frame, unknown command, or payload too large) |
 
 ```{important}
-Do not open a plain serial monitor on the port while using the Hardware API — unstructured
+Do not open a plain serial monitor on the port while using the Hardware API; unstructured
 output corrupts framing. Only one process may hold the port at a time. The **`monitor`**
 command also prints unstructured ASCII, and that state **persists on the Pico** until you
 disable it or start a **`read`** capture (which auto-disables it).
@@ -59,7 +59,7 @@ reset, `"assert":false` to let it run.
 A JSON-only chunked transfer (1476 raw bytes per chunk, base64-encoded):
 
 1. `{"v":1,"cmd":"upload_rom","action":"begin","size":32768}`
-2. `{"v":1,"cmd":"upload_rom","action":"chunk","offset":0,"data":"<base64>"}` — repeat until
+2. `{"v":1,"cmd":"upload_rom","action":"chunk","offset":0,"data":"<base64>"}`, repeat until
    all 32 KB have been sent.
 3. `{"v":1,"cmd":"upload_rom","action":"commit"}` → `{"v":1,"ok":true,"reset_vector":"8000",...}`
 
@@ -82,7 +82,7 @@ Final event:
 ```
 
 To use this in automated tests, end your ROM with a **`STP` (`0xDB`)** instruction (not
-`BRK` — that opcode is `0x00`). Starting a `read` automatically disables the ASCII monitor
+`BRK`, that opcode is `0x00`). Starting a `read` automatically disables the ASCII monitor
 on the Pico.
 
 At the default **0.2 Hz** clock, cycle events arrive about **once every 5 seconds**. The
@@ -95,8 +95,8 @@ Returns the last address sampled on the bus (updated every PHI2 rising edge).
 
 ### status
 
-Returns a full hardware snapshot — clock frequency, reset state, ROM active flag, and
-whether the ASCII monitor is enabled — in a single JSON response.
+Returns a full hardware snapshot: clock frequency, reset state, ROM active flag, and
+whether the ASCII monitor is enabled, in a single JSON response.
 
 ### monitor
 

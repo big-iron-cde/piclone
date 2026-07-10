@@ -1,6 +1,6 @@
 # Piclone
 
-> A Raspberry Pi Pico acts as the **ROM and clock** for a real **W65C02S** CPU on a breadboard — single 3.3 V logic, no EPROM, no oscillator can, no level shifters.
+> A Raspberry Pi Pico acts as the **ROM and clock** for a real **W65C02S** CPU on a breadboard: single 3.3 V logic, no EPROM, no oscillator can, no level shifters.
 
 [![Docs](https://github.com/big-iron-cde/piclone/actions/workflows/docs.yml/badge.svg)](https://big-iron-cde.github.io/piclone/)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://big-iron-cde.github.io/piclone/)
@@ -19,14 +19,15 @@ The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus 
   - [Hardware](#hardware)
   - [Wiring](#wiring)
     - [Board layout](#board-layout)
-    - [Diagram 1 — 65C02 ↔ Pico](#diagram-1--65c02--pico)
-    - [Diagram 2 — 65C02 ↔ RAM](#diagram-2--65c02--ram)
+    - [Diagram 1: 65C02 ↔ Pico](#diagram-1-65c02--pico)
+    - [Diagram 2: 65C02 ↔ RAM](#diagram-2-65c02--ram)
     - [Shared bus (65C02 ↔ Pico ↔ RAM)](#shared-bus-65c02--pico--ram)
     - [Point-to-point connections](#point-to-point-connections)
     - [Pull-up resistors (6 × 10 kΩ, all to +3.3 V)](#pull-up-resistors-6--10-kω-all-to-33-v)
     - [Power](#power)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
+    - [Pico Board Types](#pico-board-types)
   - [Usage](#usage)
   - [Hardware API](#hardware-api)
   - [Examples](#examples)
@@ -45,7 +46,7 @@ The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus 
 - Runs a real W65C02S from a Pico-hosted 32 KB ROM image mapped to `$8000–$FFFF`.
 - Generates the PHI2 clock (default **0.2 Hz**, ~5 s/cycle for step-by-step learning).
 - Drives RESET (open-drain emulated) and auto-starts clock + ROM + reset on USB connect.
-- Single 3.3 V logic level — no MOSFETs, level shifters, or oscillator chip.
+- Single 3.3 V logic level: no MOSFETs, level shifters, or oscillator chip.
 - Framed USB-serial **Hardware API** (JSON) for scripted bring-up and CI.
 - Structured JSON bus-cycle capture (`read` until `STP`) for automated tests.
 - Optional ASCII bus monitor for manual breadboard observation.
@@ -89,7 +90,7 @@ When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the P
 |---|---|---|
 | Raspberry Pi Pico 2 | 1 | Acts as ROM + clock source |
 | W65C02S | 1 | The CPU |
-| HM62256LP | 1 | RAM. **5 V part run at 3.3 V — out of spec, may be flaky** |
+| HM62256LP | 1 | RAM. **5 V part run at 3.3 V, out of spec, may be flaky** |
 | 10 kΩ resistor | 6 | Pull-ups for 65C02 control inputs |
 | External 3.3 V supply | 1 | Powers 65C02 + RAM + pull-ups |
 | Breadboard + jumper wires | 1 | Full-size (~830 tie-points) recommended |
@@ -108,13 +109,13 @@ Component placement on the breadboard, left to right: the **3.3 V supply** (top-
 
 The full wiring is split into two diagrams because routing every net in a single view was unreadable. Both halves share the same 65C02 in the middle; together they form the complete circuit. In both, **red = +3.3 V rail** and **blue = GND rail**.
 
-### Diagram 1 — 65C02 ↔ Pico
+### Diagram 1: 65C02 ↔ Pico
 
 The Pico drives the address bus and the ROM data bus, plus RESET and PHI2 (the green wires). Purple wires are the shared A0–A15 / D0–D7 bus; the resistors are the 10 kΩ pull-ups on the 65C02 control inputs.
 
 ![Wiring diagram of the W65C02S connected to the Raspberry Pi Pico](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/picohalf_circuit.png)
 
-### Diagram 2 — 65C02 ↔ RAM
+### Diagram 2: 65C02 ↔ RAM
 
 The same address and data bus continues from the 65C02 to the HM62256 RAM (orange wires), with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on the right.
 
@@ -157,7 +158,7 @@ The same address and data bus continues from the 65C02 to the HM62256 RAM (orang
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
 | Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock at 0.2 Hz |
 | Pico GP23 | 65C02 pin 34 (RWB) | Read/write sense for bus monitor |
-| RAM pin 22 (OE#) | +3.3 V | Outputs disabled (writes only) — avoids bus contention |
+| RAM pin 22 (OE#) | +3.3 V | Outputs disabled (writes only), avoids bus contention |
 
 ### Pull-up resistors (6 × 10 kΩ, all to +3.3 V)
 
@@ -182,7 +183,7 @@ The same address and data bus continues from the 65C02 to the HM62256 RAM (orang
 ## Prerequisites
 
 - [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) + ARM GCC toolchain (set `PICO_SDK_PATH`)
-- [CMake](https://cmake.org/) ≥ 3.13 and `make` — firmware targets the **Pico 2** (`PICO_BOARD=pico2`)
+- [CMake](https://cmake.org/) ≥ 3.13 and `make`, firmware targets the **Pico 2** (`PICO_BOARD=pico2`)
 - [picotool](https://github.com/raspberrypi/picotool) (optional, for flashing without BOOTSEL)
 - Python 3.8+ and [uv](https://github.com/astral-sh/uv) for the [Romulan](https://github.com/big-iron-cde/romulan) host client
 
@@ -209,7 +210,7 @@ uv sync
 
 ### Pico Board Types
 
-This software supports the Raspberry Pi Pico SoC. Pass the following valid values to the `-DBOARD_TYPE` argument in the `cmake` command
+This software supports the Raspberry Pi Pico SoC. Pass the following valid values to the `-DPICO_BOARD` argument in the `cmake` command
 depending on the board intended for use:
 
 * `pico`
@@ -219,7 +220,7 @@ depending on the board intended for use:
 
 ## Usage
 
-1. **Flash the firmware** — see [Deployment](#deployment). On USB connect the Pico auto-starts the clock, ROM emulation, and releases RESET; the built-in demo runs immediately.
+1. **Flash the firmware:** see [Deployment](#deployment). On USB connect the Pico auto-starts the clock, ROM emulation, and releases RESET; the built-in demo runs immediately.
 2. **Build a ROM image and upload it** with Romulan:
 
 ```bash
@@ -230,7 +231,7 @@ uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
 ```
 
 > [!NOTE]
-> `rom_image[]` lives in SRAM and is lost on Pico power-cycle — re-upload after each reboot.
+> `rom_image[]` lives in SRAM and is lost on Pico power-cycle, re-upload after each reboot.
 
 ## Hardware API
 
@@ -246,7 +247,7 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 | `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
 
 > [!IMPORTANT]
-> Don't open a plain serial monitor on the port while using the Hardware API, and disable `monitor` before scripted upload/read — unstructured output corrupts framing. Use `--read-stp`, which disables it automatically.
+> Don't open a plain serial monitor on the port while using the Hardware API, and disable `monitor` before scripted upload/read; unstructured output corrupts framing. Use `--read-stp`, which disables it automatically.
 
 Full protocol and command reference: [Hardware API docs](https://big-iron-cde.github.io/piclone/hardware-api.html).
 
@@ -314,11 +315,11 @@ piclone/
 ```
 
 > [!NOTE]
-> ROM building and host-side control live in the separate [Romulan](https://github.com/big-iron-cde/romulan) repository — see [Host tools](https://big-iron-cde.github.io/piclone/host-tools.html).
+> ROM building and host-side control live in the separate [Romulan](https://github.com/big-iron-cde/romulan) repository, see [Host tools](https://big-iron-cde.github.io/piclone/host-tools.html).
 
 ## Documentation Website
 
-The complete documentation — full wiring reference, firmware internals (Doxygen), the Hardware API protocol, and host-tool API — is published at **<https://big-iron-cde.github.io/piclone/>**.
+The complete documentation (full wiring reference, firmware internals, the Hardware API protocol, and host-tool API) is published at **<https://big-iron-cde.github.io/piclone/>**.
 
 Build it locally:
 

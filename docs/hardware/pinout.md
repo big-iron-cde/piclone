@@ -3,7 +3,7 @@
 The full per-chip pin maps. For the condensed bus/connection tables, see below:
 [Wiring](wiring.md).
 
-## Raspberry Pi Pico 2 — GPIO allocation
+## Raspberry Pi Pico 2: GPIO allocation
 
 | Pico physical pin | GP | Function | Wired to |
 |---|---|---|---|
@@ -47,7 +47,7 @@ The full per-chip pin maps. For the condensed bus/connection tables, see below:
 - **GP28 (PHI2):** fixed clock output at **0.2 Hz** (5 s per cycle) for step-by-step
   learning. Configurable in firmware for faster speeds.
 
-## W65C02S — 40-pin DIP (top view, notch up)
+## W65C02S: 40-pin DIP (top view, notch up)
 
 ```
                 ┌────────U────────┐
@@ -84,7 +84,7 @@ pin 36 (BE, R4), pin 40 (RESB, R5), pin 38 (SOB, R6).
 **Special wire:** pin 34 (RWB) → **RAM pin 27 (WE#)** (not the Pico). This is how the CPU
 tells the RAM "I'm writing now."
 
-## HM62256LP — 28-pin DIP (top view, notch up)
+## HM62256LP: 28-pin DIP (top view, notch up)
 
 ```
                 ┌────────U────────┐
@@ -112,6 +112,6 @@ tells the RAM "I'm writing now."
 `A15 = 1 → CE# = 1 → RAM Hi-Z`. No inverter needed.
 
 **Why OE# = +3.3 V (not GND):** `OE#` is active-low. Held high, the RAM never drives the
-data bus — it only accepts writes (via `WE#`). This avoids bus contention during CPU
+data bus, it only accepts writes (via `WE#`). This avoids bus contention during CPU
 stores. Reads from RAM return floating garbage, which is fine for ROM-only test programs
 that only write to RAM.

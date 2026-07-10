@@ -1,4 +1,4 @@
-# Wiring — Complete Connection List
+# Wiring: Complete Connection List
 
 One place to look while wiring. For the per-chip pin diagrams, see
 [Pinout Reference](pinout.md).
@@ -15,7 +15,7 @@ The full wiring is split into two diagrams because routing every net in a single
 unreadable. Both halves share the same 65C02 in the middle; together they form the complete
 circuit. In both, **red = +3.3 V rail** and **blue = GND rail**.
 
-### Diagram 1 — 65C02 ↔ Pico
+### Diagram 1: 65C02 ↔ Pico
 
 The Pico drives the address bus and the ROM data bus, plus RESET and PHI2 (the green wires).
 Purple wires are the shared A0–A15 / D0–D7 bus; the resistors are the 10 kΩ pull-ups on the
@@ -23,7 +23,7 @@ Purple wires are the shared A0–A15 / D0–D7 bus; the resistors are the 10 kΩ
 
 ![Wiring diagram of the W65C02S connected to the Raspberry Pi Pico](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/picohalf_circuit.png)
 
-### Diagram 2 — 65C02 ↔ RAM
+### Diagram 2: 65C02 ↔ RAM
 
 The same address and data bus continues from the 65C02 to the HM62256 RAM (orange wires),
 with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on
@@ -70,7 +70,7 @@ The connection tables below list every net precisely.
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
 | Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Fixed clock at 0.2 Hz (5 s per cycle) |
 | Pico GP23 | 65C02 pin 34 (RWB) | Read/write sense for the bus monitor |
-| RAM pin 22 (OE#) | +3.3 V | Outputs disabled — writes only, avoids contention |
+| RAM pin 22 (OE#) | +3.3 V | Outputs disabled, writes only, avoids contention |
 
 ## Pull-up resistors (6 × 10 kΩ, all top to +3.3 V)
 
@@ -81,7 +81,7 @@ The connection tables below list every net precisely.
 | R3 | 65C02 pin 6 (NMIB) | Inactive (high) when unused |
 | R4 | 65C02 pin 36 (BE) | Bus always enabled |
 | R5 | 65C02 pin 40 (RESB) | High when Pico isn't asserting reset |
-| R6 | 65C02 pin 38 (SOB) | Inactive (high) when unused — cheap insurance |
+| R6 | 65C02 pin 38 (SOB) | Inactive (high) when unused, cheap insurance |
 
 ## Leave open
 

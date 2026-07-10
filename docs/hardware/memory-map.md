@@ -19,7 +19,7 @@ $FFFF ─┴─────────────────┘
   `rom_image[addr & 0x7FFF]`.
 
 A15 itself does all the decoding: it drives the RAM's active-low `CE#` directly, so
-`A15 = 0` selects the RAM and `A15 = 1` deselects it — a perfect match with no inverter.
+`A15 = 0` selects the RAM and `A15 = 1` deselects it, a perfect match with no inverter.
 
 ## Virtual print port
 

@@ -23,7 +23,7 @@ uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
 ```
 
 ```{note}
-`rom_image[]` is lost on Pico power-cycle — re-upload after each reboot.
+`rom_image[]` is lost on Pico power-cycle, re-upload after each reboot.
 ```
 
 ## HTTP REST API
