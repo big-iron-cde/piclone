@@ -21,29 +21,28 @@
 2. **Set up host tools:** install [Romulan](https://github.com/big-iron-cde/romulan):
    `cd ~/Downloads/romulan && uv sync`.
 3. **Dumb-ROM test** (no upload needed after a fresh boot): plug in USB, the built-in demo
-   starts automatically and the CPU runs at 0.2 Hz (5 s per instruction). Observe it:
+   starts automatically and the CPU runs at **1 kHz**. Observe it:
 
    ```bash
    cd ~/Downloads/romulan
    uv run python -c "
-   from romulan.hardware_api import HardwareAPI
-   with HardwareAPI() as api:
+   from romulan.hardware_api import open_hardware_api
+   with open_hardware_api() as api:
        api.monitor(enable=True)
        input('Press Enter to stop...')
        api.monitor(enable=False)   # before upload or read capture
    "
    ```
 
-   Or capture structured bus data:
-   `uv run romulan hardware capture --until stp --port /dev/ttyACM0` (with a ROM that ends
-   in `STP`).
+   Or capture structured bus data (built-in ROM ends in `STP`):
+   `uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0`.
 4. **Full program test:**
 
    ```bash
    cd ~/Downloads/romulan
    uv run romulan program.txt --build --upload
-   uv run romulan hardware capture --until stp --port /dev/ttyACM0
+   uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
    ```
-5. **RAM test (optional):** a program that `STA`s then `LDA`s from `$0200`. The HM62256 at
-   3.3 V may still be flaky, if reads fail, the built-in demo (which only writes to RAM)
-   still works fine.
+5. **RAM writes (optional):** a program that `STA`s to `$0200` (or `$4000`) can be observed
+   via `read` / `monitor`. With `OE#` tied high the HM62256 never drives the bus, so
+   `LDA` from RAM returns floating garbage. The built-in demo only writes to RAM.

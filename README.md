@@ -156,7 +156,7 @@ The same address and data bus continues from the 65C02 to the HM62256 RAM (orang
 |---|---|---|
 | 65C02 pin 34 (RWB) | RAM pin 27 (WE#) | CPU write-enable to RAM |
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
-| Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock at 0.2 Hz |
+| Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock at 1 kHz (default) |
 | Pico GP23 | 65C02 pin 34 (RWB) | Read/write sense for bus monitor |
 | RAM pin 22 (OE#) | +3.3 V | Outputs disabled (writes only), avoids bus contention |
 
@@ -241,8 +241,9 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 |---|---|---|
 | `reset` | `{"v":1,"cmd":"reset","assert":true}` | `{"v":1,"ok":true,"asserted":true}` |
 | `upload_rom` | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; `commit` returns `reset_vector` |
-| `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | event stream then `{"type":"event","event":"done",...}` |
-| `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":0.2}` |
+| `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | poll `read_event` for cycle/`done` |
+| `read_event` | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` |
+| `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":1000}` |
 | `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
 | `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
 
@@ -265,7 +266,7 @@ with HardwareAPI("/dev/ttyACM0") as api:
     api.upload_rom(open("bin/rom.bin", "rb").read())   # chunked, base64-encoded upload
     api.reset(assert_reset=False)                      # release → run
 
-    capture = api.read_until_stp(max_cycles=500)       # disables monitor; ~12 s/frame
+    capture = api.read_until_stp(max_cycles=500)       # disables monitor; ~1 kHz PHI2
     print(capture.reason, len(capture.cycles))
 ```
 
@@ -285,7 +286,7 @@ uv run romulan program.txt --build --upload             # demo program ends in S
 uv run romulan hardware capture --until stp --port /dev/ttyACM0
 ```
 
-`read_until_stp()` captures one frame per PHI2 rising edge until the CPU fetches `STP` or `max_cycles` is reached. At the default 0.2 Hz clock, frames arrive ~every 5 s (host waits up to 12 s/frame).
+`read_until_stp()` captures one frame per PHI2 rising edge until the CPU fetches `STP` or `max_cycles` is reached. At the default **1 kHz** clock, host polling keeps up via a multi-slot firmware queue.
 
 ## Deployment
 

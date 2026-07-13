@@ -7,6 +7,18 @@
 #include "tusb.h"
 #include <stdio.h>
 
+static proto_idle_fn idle_hook;
+
+void proto_set_idle_hook(proto_idle_fn fn) {
+    idle_hook = fn;
+}
+
+static void proto_idle(void) {
+    if (idle_hook) {
+        idle_hook();
+    }
+}
+
 bool proto_read_byte(uint8_t *out, uint32_t timeout_ms) {
     absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
     while (true) {
@@ -18,6 +30,7 @@ bool proto_read_byte(uint8_t *out, uint32_t timeout_ms) {
         if (absolute_time_diff_us(get_absolute_time(), deadline) <= 0) {
             return false;
         }
+        proto_idle();
         tight_loop_contents();
     }
 }
@@ -54,6 +67,7 @@ static bool read_payload_until_eot(uint8_t *buf, size_t buf_size, size_t *out_le
             if (absolute_time_diff_us(get_absolute_time(), deadline) <= 0) {
                 return false;
             }
+            proto_idle();
             continue;
         }
         deadline = make_timeout_time_ms(timeout_ms);
@@ -97,15 +111,11 @@ bool proto_send_frame(const uint8_t *payload, size_t len) {
     if (!proto_write_byte(CTRL_STX)) {
         return false;
     }
-    /* Flush before waiting for ACK so ENQ/STX leave USB after idle gaps
-     * (e.g. capture cycle frames ~5 s apart). Without this the host can
-     * time out waiting for 0x05 while we block on ACK. */
+    /* Flush before waiting for ACK so ENQ/STX leave USB after idle gaps. */
     stdio_flush();
     if (tud_cdc_connected()) {
         tud_cdc_write_flush();
     }
-    /* Capture frames are unsolicited; give the host more time to enter the
-     * ENQ wait after the read ack than the default command path needs. */
     if (!wait_host_ack(10000)) {
         return false;
     }

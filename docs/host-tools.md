@@ -17,7 +17,7 @@ uv sync
 Build and upload a ROM, then capture the bus:
 
 ```bash
-uv run romulan program.txt --build --upload                 # assemble + upload via Hardware API
+uv run romulan program.txt --build --upload                 # assemble + framed Hardware API upload
 uv run romulan hardware upload bin/rom.bin --port /dev/ttyACM0
 uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
 ```
@@ -25,20 +25,6 @@ uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
 ```{note}
 `rom_image[]` is lost on Pico power-cycle, re-upload after each reboot.
 ```
-
-## HTTP REST API
-
-Romulan also exposes an HTTP REST server, so any client (curl, browser, CI) can drive the
-device without speaking the framed serial protocol directly:
-
-```bash
-PICO_PORT=/dev/ttyACM0 uvicorn api_server:app --host 127.0.0.1 --port 8080
-curl http://127.0.0.1:8080/v1/status
-curl -X POST http://127.0.0.1:8080/v1/reset -H 'Content-Type: application/json' -d '{"assert":true}'
-curl -X POST http://127.0.0.1:8080/v1/rom --data-binary @bin/rom.bin
-```
-
-OpenAPI docs are served at `http://127.0.0.1:8080/docs`.
 
 ## Python client
 
@@ -50,15 +36,14 @@ with HardwareAPI("/dev/ttyACM0") as api:
 
     api.reset(assert_reset=True)                       # hold CPU in reset
     api.upload_rom(open("bin/rom.bin", "rb").read())   # chunked, base64-encoded upload
-    api.reset(assert_reset=False)                      # release → run
+    # commit leaves RESET asserted — capture arms then releases reset
 
-    capture = api.read_until_stp(max_cycles=500)       # disables monitor; ~12 s/frame
+    capture = api.read_until_stp(max_cycles=500)       # disables monitor; polls at ~1 kHz PHI2
     print(capture.reason, len(capture.cycles))
 ```
 
 `read_until_stp()` captures one JSON event per PHI2 rising edge until the CPU fetches `STP`
-(`0xDB`) or `max_cycles` is reached. At the default 0.2 Hz clock, frames arrive about every
-5 s (the host waits up to 12 s per frame).
+(`0xDB`) or `max_cycles` is reached. The firmware default clock is **1 kHz**.
 
 ## Demo program
 

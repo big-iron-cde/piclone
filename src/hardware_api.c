@@ -10,6 +10,7 @@
 
 #define STP_OPCODE 0xDB
 #define DATA_MASK  (0xFFu << 15)
+#define CAPTURE_QUEUE_DEPTH 256
 
 static hw_context_t hw;
 static uint16_t last_addr;
@@ -21,21 +22,60 @@ static bool reset_asserted;
 static uint32_t read_max_cycles;
 static uint32_t read_cycle_count;
 
-/* Deferred capture TX — filled on PHI2 edge, sent from hardware_api_poll(). */
-static bool pending_cycle;
+typedef struct {
+    uint16_t addr;
+    uint8_t data;
+    uint8_t rw; /* protocol: 0 = read, 1 = write */
+    uint32_t seq;
+} capture_sample_t;
+
+static capture_sample_t capture_queue[CAPTURE_QUEUE_DEPTH];
+static uint16_t capture_q_head;
+static uint16_t capture_q_tail;
+static uint16_t capture_q_count;
 static bool pending_done;
-static uint16_t pending_addr;
-static uint8_t pending_data;
-static uint8_t pending_rw; /* protocol: 0 = read, 1 = write */
-static uint32_t pending_seq;
 static bool pending_done_ok;
 static const char *pending_done_reason;
+static uint16_t pending_done_addr;
 
 /* upload_rom state */
 static bool upload_active;
 static uint32_t upload_expected;
 static uint32_t upload_received;
 static uint32_t upload_next_offset;
+
+static void capture_queue_clear(void) {
+    capture_q_head = 0;
+    capture_q_tail = 0;
+    capture_q_count = 0;
+    pending_done = false;
+    pending_done_ok = false;
+    pending_done_reason = NULL;
+    pending_done_addr = 0;
+}
+
+static bool capture_queue_push(uint16_t addr, uint8_t data, uint8_t rw, uint32_t seq) {
+    if (capture_q_count >= CAPTURE_QUEUE_DEPTH) {
+        return false;
+    }
+    capture_queue[capture_q_tail].addr = addr;
+    capture_queue[capture_q_tail].data = data;
+    capture_queue[capture_q_tail].rw = rw;
+    capture_queue[capture_q_tail].seq = seq;
+    capture_q_tail = (uint16_t)((capture_q_tail + 1u) % CAPTURE_QUEUE_DEPTH);
+    capture_q_count++;
+    return true;
+}
+
+static bool capture_queue_pop(capture_sample_t *out) {
+    if (capture_q_count == 0) {
+        return false;
+    }
+    *out = capture_queue[capture_q_head];
+    capture_q_head = (uint16_t)((capture_q_head + 1u) % CAPTURE_QUEUE_DEPTH);
+    capture_q_count--;
+    return true;
+}
 
 static void upload_reset_state(void) {
     upload_active = false;
@@ -46,6 +86,14 @@ static void upload_reset_state(void) {
 
 static bool upload_is_complete(void) {
     return upload_received >= hw.rom_size;
+}
+
+static void upload_abort_restore(void) {
+    upload_reset_state();
+    *hw.rom_active = true;
+    hw.reset_assert();
+    reset_asserted = true;
+    gpio_set_dir_in_masked(DATA_MASK);
 }
 
 static void cmd_reset(cJSON *root, const char *req_id) {
@@ -74,6 +122,20 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
         return;
     }
 
+    if (strcmp(action, "abort") == 0) {
+        upload_abort_restore();
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+        json_attach_id(resp, req_id);
+        cJSON_AddBoolToObject(resp, "ok", true);
+        cJSON_AddStringToObject(resp, "cmd", "upload_rom");
+        cJSON_AddStringToObject(resp, "action", "abort");
+        cJSON_AddBoolToObject(resp, "reset_asserted", true);
+        json_send_object(resp);
+        cJSON_Delete(resp);
+        return;
+    }
+
     if (strcmp(action, "begin") == 0) {
         uint32_t size = json_get_uint(root, "size", 0);
         if (size != hw.rom_size) {
@@ -87,7 +149,6 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
         upload_next_offset = 0;
         upload_received = 0;
 
-        bool was_active = *hw.rom_active;
         *hw.rom_active = false;
         gpio_set_dir_in_masked(DATA_MASK);
         hw.reset_assert();
@@ -103,7 +164,6 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
         cJSON_AddNumberToObject(resp, "expected", (double)upload_expected);
         json_send_object(resp);
         cJSON_Delete(resp);
-        (void)was_active;
         return;
     }
 
@@ -192,16 +252,12 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
 }
 
 static void queue_cycle_sample(uint16_t addr, uint8_t data, uint8_t rw_report) {
-    if (pending_cycle || pending_done) {
+    if (!read_active) {
         return;
     }
 
     read_cycle_count++;
-    pending_addr = addr;
-    pending_data = data;
-    pending_rw = rw_report;
-    pending_seq = read_cycle_count;
-    pending_cycle = true;
+    (void)capture_queue_push(addr, data, rw_report, read_cycle_count);
 
     bool stp_fetch = (rw_report == 0u && data == STP_OPCODE);
     bool limit = (read_cycle_count >= read_max_cycles);
@@ -209,6 +265,7 @@ static void queue_cycle_sample(uint16_t addr, uint8_t data, uint8_t rw_report) {
         read_active = false;
         pending_done_ok = true;
         pending_done_reason = stp_fetch ? "stp" : "max_cycles";
+        pending_done_addr = addr;
         pending_done = true;
     }
 }
@@ -233,8 +290,7 @@ static void cmd_read(cJSON *root, const char *req_id) {
         read_max_cycles = 10000;
     }
     read_cycle_count = 0;
-    pending_cycle = false;
-    pending_done = false;
+    capture_queue_clear();
     read_active = true;
     monitor_enabled = false;
 
@@ -247,21 +303,19 @@ static void cmd_read(cJSON *root, const char *req_id) {
     cJSON_AddNumberToObject(resp, "max_cycles", (double)read_max_cycles);
     json_send_object(resp);
     cJSON_Delete(resp);
-    /* First cycle comes from PHI2 after host releases reset — do not queue
-     * a pre-reset bus sample here. */
 }
 
 /*
  * Host-polled capture event. Uses the normal request/response framed path
- * (same as request_addr) instead of unsolicited Pico→host frames, which
- * were timing out on USB CDC after the read ack.
+ * (same as request_addr) instead of unsolicited Pico→host frames.
  */
 static void cmd_read_event(const char *req_id) {
-    if (pending_cycle) {
+    capture_sample_t sample;
+    if (capture_queue_pop(&sample)) {
         char addr_s[8];
         char data_s[4];
-        snprintf(addr_s, sizeof(addr_s), "%04X", pending_addr);
-        snprintf(data_s, sizeof(data_s), "%02X", pending_data);
+        snprintf(addr_s, sizeof(addr_s), "%04X", sample.addr);
+        snprintf(data_s, sizeof(data_s), "%02X", sample.data);
 
         cJSON *resp = cJSON_CreateObject();
         cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
@@ -269,19 +323,18 @@ static void cmd_read_event(const char *req_id) {
         cJSON_AddBoolToObject(resp, "ok", true);
         cJSON_AddStringToObject(resp, "type", "event");
         cJSON_AddStringToObject(resp, "event", "cycle");
-        cJSON_AddNumberToObject(resp, "seq", (double)pending_seq);
+        cJSON_AddNumberToObject(resp, "seq", (double)sample.seq);
         cJSON_AddStringToObject(resp, "addr", addr_s);
         cJSON_AddStringToObject(resp, "data", data_s);
-        cJSON_AddNumberToObject(resp, "rw", (double)pending_rw);
+        cJSON_AddNumberToObject(resp, "rw", (double)sample.rw);
         json_send_object(resp);
         cJSON_Delete(resp);
-        pending_cycle = false;
         return;
     }
 
     if (pending_done) {
         char addr_s[8];
-        snprintf(addr_s, sizeof(addr_s), "%04X", pending_addr);
+        snprintf(addr_s, sizeof(addr_s), "%04X", pending_done_addr);
         cJSON *resp = cJSON_CreateObject();
         cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
         json_attach_id(resp, req_id);
@@ -363,8 +416,7 @@ void hardware_api_init(const hw_context_t *ctx) {
     read_active = false;
     monitor_enabled = false;
     reset_asserted = false;
-    pending_cycle = false;
-    pending_done = false;
+    capture_queue_clear();
     upload_reset_state();
 }
 
@@ -400,16 +452,17 @@ void hardware_api_handle_enq(void) {
         return;
     }
 
-    /* Keep an armed capture alive across read_event polls and reset
-     * assert/release (host restarts the CPU after arming read). */
+    /* Keep an armed capture alive across read_event polls, reset, and
+     * non-destructive queries (status / request_addr). */
     if (
         strcmp(cmd, "read") != 0
         && strcmp(cmd, "read_event") != 0
         && strcmp(cmd, "reset") != 0
+        && strcmp(cmd, "status") != 0
+        && strcmp(cmd, "request_addr") != 0
     ) {
         read_active = false;
-        pending_cycle = false;
-        pending_done = false;
+        capture_queue_clear();
     }
 
     if (strcmp(cmd, "reset") == 0) {
@@ -448,10 +501,7 @@ void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {
 }
 
 void hardware_api_poll(void) {
-    /*
-     * Capture cycle/done events are returned via host-polled `read_event`
-     * commands (request/response), not unsolicited Pico→host frames.
-     */
+    /* Capture events are returned via host-polled `read_event` commands. */
 }
 
 uint16_t hardware_api_last_addr(void) {
@@ -459,7 +509,7 @@ uint16_t hardware_api_last_addr(void) {
 }
 
 bool hardware_api_is_reading(void) {
-    return read_active || pending_cycle || pending_done;
+    return read_active || capture_q_count > 0 || pending_done;
 }
 
 bool hardware_api_monitor_enabled(void) {

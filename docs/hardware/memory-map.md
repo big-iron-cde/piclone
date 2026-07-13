@@ -15,6 +15,8 @@ $FFFF ─┴─────────────────┘
 ```
 
 - When **A15 = 0** → RAM is selected (`$0000–$7FFF`). The Pico keeps its data pins Hi-Z.
+  With **OE# tied high**, the HM62256 **never drives** the data bus (write-only). CPU
+  reads from RAM see floating lines.
 - When **A15 = 1** → the Pico (acting as ROM) drives the bus (`$8000–$FFFF`), serving
   `rom_image[addr & 0x7FFF]`.
 

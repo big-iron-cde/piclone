@@ -23,6 +23,10 @@
 #include "hardware_api.h"
 #include "phi2.h"
 
+#if defined(CYW43_WL_GPIO_LED_PIN)
+#include "pico/cyw43_arch.h"
+#endif
+
 // ─── Pin map (matches README §2) ────────────────────────────────────────
 
 #define PIN_A_FIRST   0
@@ -51,12 +55,6 @@ static float    current_hz       = PHI2_DEFAULT_HZ;
 static uint16_t seq_counter      = 1;
 
 // ─── Pin setup ───────────────────────────────────────────────────────────
-
-#ifdef PICO_DEFAULT_LED_PIN
-    const uint LED_PIN = PICO_DEFAULT_LED_PIN;
-#elif defined(CYW43_WL_GPIO_LED_PIN)
-    #include "pico/cyw43_arch.h"
-#endif
 
 static void pins_init(void) {
     for (int p = PIN_A_FIRST; p <= PIN_A_LAST; p++) {
@@ -103,10 +101,6 @@ static void phi2_start_us(uint32_t half_period_us) {
     if (phi2_half_us < 2) phi2_half_us = 2;
 
     phi2_alarm_id = add_alarm_in_us(phi2_half_us, phi2_alarm_callback, NULL, true);
-
-    float hz = 1000000.0f / (2.0f * (float)phi2_half_us);
-    printf("PHI2 on: target %.1f Hz (half-period=%lu us)\n",
-           hz, (unsigned long)phi2_half_us);
 }
 
 void phi2_set_hz(float hz) {
@@ -157,9 +151,12 @@ static void rom_image_init(void) {
     rom_image[0x0008] = 0x8D;       // STA $4000
     rom_image[0x0009] = 0x00;
     rom_image[0x000A] = 0x40;
-    rom_image[0x000B] = 0x4C;       // JMP $8000
-    rom_image[0x000C] = 0x00;
-    rom_image[0x000D] = 0x80;
+    rom_image[0x000B] = 0xA9;       // LDA #$08
+    rom_image[0x000C] = 0x08;
+    rom_image[0x000D] = 0x8D;       // STA $4010
+    rom_image[0x000E] = 0x10;
+    rom_image[0x000F] = 0x40;
+    rom_image[0x0010] = 0xDB;       // STP (stops hardware capture)
 
     rom_image[0x7FFC] = 0x00;
     rom_image[0x7FFD] = 0x80;
@@ -217,14 +214,6 @@ static void rom_task(void) {
 
 // ─── Main loop ──────────────────────────────────────────────────────────
 
-static void print_banner(void) {
-    printf("\n=== piclone — Hardware API ===\n");
-    printf("Protocol: ENQ STX ACK JSON EOT ACK\n");
-    printf("Commands: reset, upload_rom, read, request_addr, monitor, status (v1 JSON)\n");
-    printf("65C02 clock: %.1f Hz  ROM: ON\n", current_hz);
-    stdio_flush();
-}
-
 int main(void) {
     stdio_init_all();
     pins_init();
@@ -239,23 +228,27 @@ int main(void) {
         .reset_release = reset_release,
     };
     hardware_api_init(&ctx);
+    proto_set_idle_hook(rom_task);
 
-    #if defined(CYW43_WL_GPIO_LED_PIN)
-        if (cyw43_arch_init()) {
-            return 1;
-        }
-        uint PICO_DEFAULT_LED_PIN = CYW43_WL_GPIO_LED_PIN;
-    #elif defined(PICO_DEFAULT_LED_PIN)
-        gpio_init(PICO_DEFAULT_LED_PIN);
-        gpio_set_dir(LED_PIN, GPIO_OUT);
-    #endif
+#if defined(CYW43_WL_GPIO_LED_PIN)
+    if (cyw43_arch_init()) {
+        return 1;
+    }
+#elif defined(PICO_DEFAULT_LED_PIN)
+    gpio_init(PICO_DEFAULT_LED_PIN);
+    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+#endif
 
     absolute_time_t led_toggle = get_absolute_time();
     bool led_on = false;
     while (!stdio_usb_connected()) {
         if (absolute_time_diff_us(get_absolute_time(), led_toggle) <= 0) {
             led_on = !led_on;
+#if defined(CYW43_WL_GPIO_LED_PIN)
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_on);
+#elif defined(PICO_DEFAULT_LED_PIN)
             gpio_put(PICO_DEFAULT_LED_PIN, led_on);
+#endif
             led_toggle = make_timeout_time_ms(250);
         }
         tight_loop_contents();
@@ -265,18 +258,27 @@ int main(void) {
     phi2_set_hz(PHI2_DEFAULT_HZ);
     rom_active = true;
     reset_release();
-    print_banner();
 
+#if defined(CYW43_WL_GPIO_LED_PIN)
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+#elif defined(PICO_DEFAULT_LED_PIN)
     gpio_put(PICO_DEFAULT_LED_PIN, 1);
+#endif
 
     absolute_time_t next_blink = get_absolute_time();
+    bool led_blink_on = true;
 
     while (true) {
         rom_task();
         hardware_api_poll();
 
         if (absolute_time_diff_us(get_absolute_time(), next_blink) <= 0) {
-            gpio_xor_mask(1u << PICO_DEFAULT_LED_PIN);
+            led_blink_on = !led_blink_on;
+#if defined(CYW43_WL_GPIO_LED_PIN)
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_blink_on);
+#elif defined(PICO_DEFAULT_LED_PIN)
+            gpio_put(PICO_DEFAULT_LED_PIN, led_blink_on);
+#endif
             next_blink = make_timeout_time_ms(500);
         }
 
