@@ -4,6 +4,7 @@
 
 #include "protocol.h"
 #include "pico/stdlib.h"
+#include "tusb.h"
 #include <stdio.h>
 
 bool proto_read_byte(uint8_t *out, uint32_t timeout_ms) {
@@ -96,7 +97,16 @@ bool proto_send_frame(const uint8_t *payload, size_t len) {
     if (!proto_write_byte(CTRL_STX)) {
         return false;
     }
-    if (!wait_host_ack(3000)) {
+    /* Flush before waiting for ACK so ENQ/STX leave USB after idle gaps
+     * (e.g. capture cycle frames ~5 s apart). Without this the host can
+     * time out waiting for 0x05 while we block on ACK. */
+    stdio_flush();
+    if (tud_cdc_connected()) {
+        tud_cdc_write_flush();
+    }
+    /* Capture frames are unsolicited; give the host more time to enter the
+     * ENQ wait after the read ack than the default command path needs. */
+    if (!wait_host_ack(10000)) {
         return false;
     }
     for (size_t i = 0; i < len; i++) {
@@ -108,5 +118,8 @@ bool proto_send_frame(const uint8_t *payload, size_t len) {
         return false;
     }
     stdio_flush();
+    if (tud_cdc_connected()) {
+        tud_cdc_write_flush();
+    }
     return wait_host_ack(3000);
 }

@@ -21,6 +21,7 @@
 
 #include "protocol.h"
 #include "hardware_api.h"
+#include "phi2.h"
 
 // ─── Pin map (matches README §2) ────────────────────────────────────────
 
@@ -37,6 +38,8 @@
 
 #define ROM_SIZE      0x8000
 
+#define PHI2_DEFAULT_HZ 100.0f
+
 // ─── State ───────────────────────────────────────────────────────────────
 
 static uint8_t rom_image[ROM_SIZE];
@@ -44,7 +47,7 @@ static bool rom_active = false;
 
 static bool     phi2_last_state  = false;
 static bool     reset_last_state = true;
-static float    current_hz       = 0.2f;
+static float    current_hz       = PHI2_DEFAULT_HZ;
 static uint16_t seq_counter      = 1;
 
 // ─── Pin setup ───────────────────────────────────────────────────────────
@@ -104,6 +107,27 @@ static void phi2_start_us(uint32_t half_period_us) {
     float hz = 1000000.0f / (2.0f * (float)phi2_half_us);
     printf("PHI2 on: target %.1f Hz (half-period=%lu us)\n",
            hz, (unsigned long)phi2_half_us);
+}
+
+void phi2_set_hz(float hz) {
+    if (hz < 0.1f) {
+        hz = 0.1f;
+    } else if (hz > 1000.0f) {
+        hz = 1000.0f;
+    }
+
+    uint32_t half_us = (uint32_t)(1000000.0f / (2.0f * hz));
+    if (half_us < 2) {
+        half_us = 2;
+    }
+
+    if (phi2_alarm_id != 0) {
+        cancel_alarm(phi2_alarm_id);
+        phi2_alarm_id = 0;
+    }
+
+    phi2_start_us(half_us);
+    current_hz = 1000000.0f / (2.0f * (float)phi2_half_us);
 }
 
 // ─── Reset ───────────────────────────────────────────────────────────────
@@ -181,8 +205,9 @@ static void rom_task(void) {
         hardware_api_on_bus_cycle(addr, data, rwb);
 
         if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
+            /* Match protocol: RWB high → read → 0 */
             printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
-                   seq_counter, data, addr, rwb ? 1 : 0, current_hz);
+                   seq_counter, data, addr, rwb ? 0 : 1, current_hz);
             seq_counter++;
             if (seq_counter > 99) seq_counter = 1;
         }
@@ -237,8 +262,7 @@ int main(void) {
     }
 
     sleep_ms(200);
-    phi2_start_us(2500000);
-    current_hz = 0.2f;
+    phi2_set_hz(PHI2_DEFAULT_HZ);
     rom_active = true;
     reset_release();
     print_banner();
@@ -249,6 +273,7 @@ int main(void) {
 
     while (true) {
         rom_task();
+        hardware_api_poll();
 
         if (absolute_time_diff_us(get_absolute_time(), next_blink) <= 0) {
             gpio_xor_mask(1u << PICO_DEFAULT_LED_PIN);

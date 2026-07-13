@@ -44,7 +44,7 @@ The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus 
 ## Features
 
 - Runs a real W65C02S from a Pico-hosted 32 KB ROM image mapped to `$8000–$FFFF`.
-- Generates the PHI2 clock (default **0.2 Hz**, ~5 s/cycle for step-by-step learning).
+- Generates the PHI2 clock (default **100 Hz**, ~10 ms/cycle; optional `phi2_hz` on `read`).
 - Drives RESET (open-drain emulated) and auto-starts clock + ROM + reset on USB connect.
 - Single 3.3 V logic level: no MOSFETs, level shifters, or oscillator chip.
 - Framed USB-serial **Hardware API** (JSON) for scripted bring-up and CI.

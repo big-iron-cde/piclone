@@ -1,6 +1,7 @@
 #include "hardware_api.h"
 #include "protocol.h"
 #include "json_util.h"
+#include "phi2.h"
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 
@@ -12,11 +13,23 @@
 
 static hw_context_t hw;
 static uint16_t last_addr;
+static uint8_t last_data;
+static uint8_t last_rw_report; /* 0=read, 1=write (protocol) */
 static bool read_active;
 static bool monitor_enabled;
 static bool reset_asserted;
 static uint32_t read_max_cycles;
 static uint32_t read_cycle_count;
+
+/* Deferred capture TX — filled on PHI2 edge, sent from hardware_api_poll(). */
+static bool pending_cycle;
+static bool pending_done;
+static uint16_t pending_addr;
+static uint8_t pending_data;
+static uint8_t pending_rw; /* protocol: 0 = read, 1 = write */
+static uint32_t pending_seq;
+static bool pending_done_ok;
+static const char *pending_done_reason;
 
 /* upload_rom state */
 static bool upload_active;
@@ -176,6 +189,28 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
     json_send_error(req_id, "bad_action", "unknown upload_rom action");
 }
 
+static void queue_cycle_sample(uint16_t addr, uint8_t data, uint8_t rw_report) {
+    if (pending_cycle || pending_done) {
+        return;
+    }
+
+    read_cycle_count++;
+    pending_addr = addr;
+    pending_data = data;
+    pending_rw = rw_report;
+    pending_seq = read_cycle_count;
+    pending_cycle = true;
+
+    bool stp_fetch = (rw_report == 0u && data == STP_OPCODE);
+    bool limit = (read_cycle_count >= read_max_cycles);
+    if (stp_fetch || limit) {
+        read_active = false;
+        pending_done_ok = true;
+        pending_done_reason = stp_fetch ? "stp" : "max_cycles";
+        pending_done = true;
+    }
+}
+
 static void cmd_read(cJSON *root, const char *req_id) {
     const char *until = json_get_string(root, "until");
     if (!until || strcmp(until, "stp") != 0) {
@@ -183,11 +218,21 @@ static void cmd_read(cJSON *root, const char *req_id) {
         return;
     }
 
+    cJSON *phi2_item = cJSON_GetObjectItemCaseSensitive(root, "phi2_hz");
+    if (cJSON_IsNumber(phi2_item)) {
+        float hz = (float)phi2_item->valuedouble;
+        if (hz >= 0.1f && hz <= 1000.0f) {
+            phi2_set_hz(hz);
+        }
+    }
+
     read_max_cycles = json_get_uint(root, "max_cycles", 10000);
     if (read_max_cycles == 0) {
         read_max_cycles = 10000;
     }
     read_cycle_count = 0;
+    pending_cycle = false;
+    pending_done = false;
     read_active = true;
     monitor_enabled = false;
 
@@ -198,6 +243,68 @@ static void cmd_read(cJSON *root, const char *req_id) {
     cJSON_AddStringToObject(resp, "cmd", "read");
     cJSON_AddStringToObject(resp, "until", "stp");
     cJSON_AddNumberToObject(resp, "max_cycles", (double)read_max_cycles);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+
+    /*
+     * Queue a cycle from the last bus sample so the first read_event poll
+     * can return immediately without waiting for the next PHI2 edge.
+     */
+    queue_cycle_sample(last_addr, last_data, last_rw_report);
+}
+
+/*
+ * Host-polled capture event. Uses the normal request/response framed path
+ * (same as request_addr) instead of unsolicited Pico→host frames, which
+ * were timing out on USB CDC after the read ack.
+ */
+static void cmd_read_event(const char *req_id) {
+    if (pending_cycle) {
+        char addr_s[8];
+        char data_s[4];
+        snprintf(addr_s, sizeof(addr_s), "%04X", pending_addr);
+        snprintf(data_s, sizeof(data_s), "%02X", pending_data);
+
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+        json_attach_id(resp, req_id);
+        cJSON_AddBoolToObject(resp, "ok", true);
+        cJSON_AddStringToObject(resp, "type", "event");
+        cJSON_AddStringToObject(resp, "event", "cycle");
+        cJSON_AddNumberToObject(resp, "seq", (double)pending_seq);
+        cJSON_AddStringToObject(resp, "addr", addr_s);
+        cJSON_AddStringToObject(resp, "data", data_s);
+        cJSON_AddNumberToObject(resp, "rw", (double)pending_rw);
+        json_send_object(resp);
+        cJSON_Delete(resp);
+        pending_cycle = false;
+        return;
+    }
+
+    if (pending_done) {
+        char addr_s[8];
+        snprintf(addr_s, sizeof(addr_s), "%04X", pending_addr);
+        cJSON *resp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+        json_attach_id(resp, req_id);
+        cJSON_AddBoolToObject(resp, "ok", pending_done_ok);
+        cJSON_AddStringToObject(resp, "type", "event");
+        cJSON_AddStringToObject(resp, "event", "done");
+        cJSON_AddStringToObject(resp, "reason", pending_done_reason);
+        cJSON_AddNumberToObject(resp, "cycles", (double)read_cycle_count);
+        cJSON_AddStringToObject(resp, "addr", addr_s);
+        json_send_object(resp);
+        cJSON_Delete(resp);
+        pending_done = false;
+        return;
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "event", "none");
+    cJSON_AddBoolToObject(resp, "read_active", read_active);
     json_send_object(resp);
     cJSON_Delete(resp);
 }
@@ -253,9 +360,13 @@ static void cmd_status(const char *req_id) {
 void hardware_api_init(const hw_context_t *ctx) {
     hw = *ctx;
     last_addr = 0;
+    last_data = 0;
+    last_rw_report = 0;
     read_active = false;
     monitor_enabled = false;
     reset_asserted = false;
+    pending_cycle = false;
+    pending_done = false;
     upload_reset_state();
 }
 
@@ -291,8 +402,11 @@ void hardware_api_handle_enq(void) {
         return;
     }
 
-    if (strcmp(cmd, "read") != 0) {
+    /* read / read_event keep an armed capture alive. */
+    if (strcmp(cmd, "read") != 0 && strcmp(cmd, "read_event") != 0) {
         read_active = false;
+        pending_cycle = false;
+        pending_done = false;
     }
 
     if (strcmp(cmd, "reset") == 0) {
@@ -301,6 +415,8 @@ void hardware_api_handle_enq(void) {
         cmd_upload_rom(root, req_id);
     } else if (strcmp(cmd, "read") == 0) {
         cmd_read(root, req_id);
+    } else if (strcmp(cmd, "read_event") == 0) {
+        cmd_read_event(req_id);
     } else if (strcmp(cmd, "request_addr") == 0) {
         cmd_request_addr(req_id);
     } else if (strcmp(cmd, "monitor") == 0) {
@@ -314,59 +430,25 @@ void hardware_api_handle_enq(void) {
     cJSON_Delete(root);
 }
 
-static void send_read_event_done(bool ok, const char *reason, uint16_t addr) {
-    char addr_s[8];
-    snprintf(addr_s, sizeof(addr_s), "%04X", addr);
+void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {
+    /* Protocol / docs: RWB high → read → rw=0; RWB low → write → rw=1. */
+    uint8_t rw_report = rwb_pin ? 0u : 1u;
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
-    cJSON_AddStringToObject(resp, "type", "event");
-    cJSON_AddStringToObject(resp, "event", "done");
-    cJSON_AddBoolToObject(resp, "ok", ok);
-    cJSON_AddStringToObject(resp, "reason", reason);
-    cJSON_AddNumberToObject(resp, "cycles", (double)read_cycle_count);
-    cJSON_AddStringToObject(resp, "addr", addr_s);
-    json_send_object(resp);
-    cJSON_Delete(resp);
-}
-
-void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rw) {
     last_addr = addr;
+    last_data = data;
+    last_rw_report = rw_report;
+
     if (!read_active) {
         return;
     }
+    queue_cycle_sample(addr, data, rw_report);
+}
 
-    read_cycle_count++;
-
-    char addr_s[8];
-    char data_s[4];
-    snprintf(addr_s, sizeof(addr_s), "%04X", addr);
-    snprintf(data_s, sizeof(data_s), "%02X", data);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
-    cJSON_AddStringToObject(resp, "type", "event");
-    cJSON_AddStringToObject(resp, "event", "cycle");
-    cJSON_AddNumberToObject(resp, "seq", (double)read_cycle_count);
-    cJSON_AddStringToObject(resp, "addr", addr_s);
-    cJSON_AddStringToObject(resp, "data", data_s);
-    cJSON_AddNumberToObject(resp, "rw", rw ? 1 : 0);
-
-    if (!json_send_object(resp)) {
-        cJSON_Delete(resp);
-        read_active = false;
-        send_read_event_done(false, "host_nack", addr);
-        return;
-    }
-    cJSON_Delete(resp);
-
-    bool stp_fetch = (!rw && data == STP_OPCODE);
-    bool limit = (read_cycle_count >= read_max_cycles);
-
-    if (stp_fetch || limit) {
-        read_active = false;
-        send_read_event_done(true, stp_fetch ? "stp" : "max_cycles", addr);
-    }
+void hardware_api_poll(void) {
+    /*
+     * Capture cycle/done events are returned via host-polled `read_event`
+     * commands (request/response), not unsolicited Pico→host frames.
+     */
 }
 
 uint16_t hardware_api_last_addr(void) {
@@ -374,7 +456,7 @@ uint16_t hardware_api_last_addr(void) {
 }
 
 bool hardware_api_is_reading(void) {
-    return read_active;
+    return read_active || pending_cycle || pending_done;
 }
 
 bool hardware_api_monitor_enabled(void) {

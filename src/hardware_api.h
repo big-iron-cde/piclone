@@ -26,8 +26,12 @@ void hardware_api_init(const hw_context_t *ctx);
 /* Call when ENQ (0x05) is seen on serial input. */
 void hardware_api_handle_enq(void);
 
-/* Call from rom_task on each PHI2 rising-edge sample. */
-void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rw);
+/* Call from rom_task on each PHI2 rising-edge sample.
+ * `rwb_pin` is the raw RWB GPIO level (1 = high). */
+void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin);
+
+/* Send any pending capture frames (call from main after rom_task). */
+void hardware_api_poll(void);
 
 uint16_t hardware_api_last_addr(void);
 bool hardware_api_is_reading(void);
