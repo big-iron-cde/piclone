@@ -38,7 +38,7 @@
 
 #define ROM_SIZE      0x8000
 
-#define PHI2_DEFAULT_HZ 100.0f
+#define PHI2_DEFAULT_HZ 1000.0f
 
 // ─── State ───────────────────────────────────────────────────────────────
 

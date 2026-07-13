@@ -165,8 +165,9 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
         }
 
         *hw.rom_active = true;
-        hw.reset_release();
-        reset_asserted = false;
+        /* Keep CPU in reset after commit so the host can start capture from $8000. */
+        hw.reset_assert();
+        reset_asserted = true;
         upload_active = false;
 
         char rv[8];
@@ -181,6 +182,7 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
         cJSON_AddStringToObject(resp, "action", "commit");
         cJSON_AddNumberToObject(resp, "bytes", (double)hw.rom_size);
         cJSON_AddStringToObject(resp, "reset_vector", rv);
+        cJSON_AddBoolToObject(resp, "reset_asserted", true);
         json_send_object(resp);
         cJSON_Delete(resp);
         return;
@@ -245,12 +247,8 @@ static void cmd_read(cJSON *root, const char *req_id) {
     cJSON_AddNumberToObject(resp, "max_cycles", (double)read_max_cycles);
     json_send_object(resp);
     cJSON_Delete(resp);
-
-    /*
-     * Queue a cycle from the last bus sample so the first read_event poll
-     * can return immediately without waiting for the next PHI2 edge.
-     */
-    queue_cycle_sample(last_addr, last_data, last_rw_report);
+    /* First cycle comes from PHI2 after host releases reset — do not queue
+     * a pre-reset bus sample here. */
 }
 
 /*
@@ -402,8 +400,13 @@ void hardware_api_handle_enq(void) {
         return;
     }
 
-    /* read / read_event keep an armed capture alive. */
-    if (strcmp(cmd, "read") != 0 && strcmp(cmd, "read_event") != 0) {
+    /* Keep an armed capture alive across read_event polls and reset
+     * assert/release (host restarts the CPU after arming read). */
+    if (
+        strcmp(cmd, "read") != 0
+        && strcmp(cmd, "read_event") != 0
+        && strcmp(cmd, "reset") != 0
+    ) {
         read_active = false;
         pending_cycle = false;
         pending_done = false;

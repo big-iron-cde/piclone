@@ -8,7 +8,7 @@ and bundles a small JSON parser (cJSON) for the v1 Hardware API.
 
 1. **Auto-start on USB connect:** clock, ROM emulation, and RESET release happen
    automatically. No commands are needed for the CPU to run.
-2. **Generate PHI2:** a GP28 square wave at **100 Hz** by default (~10 ms per cycle) for
+2. **Generate PHI2:** a GP28 square wave at **1 kHz** by default (~1 ms per cycle) for
    faster CI and capture. The `read` command accepts optional `phi2_hz` (0.1–1000 Hz).
 3. **Reset control:** GP27 starts as OUTPUT LOW, then releases to INPUT (the pull-up runs
    the CPU) once USB is connected.
