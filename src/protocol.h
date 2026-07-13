@@ -15,7 +15,14 @@
 #define CTRL_EOT  0x04
 #define CTRL_NACK 0x15
 
-#define PROTO_JSON_MAX   2048
+/*
+ * JSON frame buffer must fit one full ROM upload chunk as base64:
+ *   32768 raw → 43692 b64 chars + JSON envelope (~100–200 bytes).
+ * Sized at 48 KiB so a single-chunk upload (and optional "id") fits.
+ * The receive buffer in hardware_api_handle_enq is static — do not put
+ * a buffer this large on the stack.
+ */
+#define PROTO_JSON_MAX   (48 * 1024)
 #define PROTO_BINARY_MAX 0x8000
 
 bool proto_read_byte(uint8_t *out, uint32_t timeout_ms);
