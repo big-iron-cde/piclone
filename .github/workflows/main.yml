@@ -4,7 +4,7 @@ on:
   push:
     tags:
       - '*.*.*'
-    
+
 permissions:
   contents: write
 
@@ -28,7 +28,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc-arm-none-eabi
-    
+
     - name: Create bin output folder
       run: mkdir -p bin
 
@@ -41,13 +41,13 @@ jobs:
         cp piclone.uf2 ../../bin/piclone-${{ matrix.board }}.uf2
         cd ../
         rm -rf build
-        
+
     - name: Create release
       id: create-release
       uses: softprops/action-gh-release@v3
       with:
         files: |
-          bin/piclone-${{ matrix.board }}.uf2
+          bin/piclone-${{ matrix.board }}-${{ github.ref_name }}.uf2
         make_latest: true
 
     env:
