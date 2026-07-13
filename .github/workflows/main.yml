@@ -38,7 +38,7 @@ jobs:
         mkdir -p build && cd build
         cmake .. -DPICO_BOARD=${{ matrix.board }}
         make
-        cp piclone.uf2 ../../bin/piclone-${{ matrix.board }}.uf2
+        cp piclone.uf2 ../../bin/piclone-${{ matrix.board }}-${{ github.ref_name }}.uf2
         cd ../
         rm -rf build
 
