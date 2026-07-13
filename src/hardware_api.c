@@ -260,7 +260,8 @@ void hardware_api_init(const hw_context_t *ctx) {
 }
 
 void hardware_api_handle_enq(void) {
-    uint8_t buf[PROTO_JSON_MAX];
+    /* Static: PROTO_JSON_MAX is large enough for a full-ROM base64 chunk. */
+    static uint8_t buf[PROTO_JSON_MAX];
     size_t len = 0;
 
     if (!proto_read_frame_payload(buf, sizeof(buf) - 1, &len)) {

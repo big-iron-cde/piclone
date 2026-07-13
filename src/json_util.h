@@ -9,7 +9,7 @@
 #define HW_API_VERSION 1
 
 /* Max raw bytes per upload_rom chunk (must match romulan/protocol_v1.py). */
-#define UPLOAD_CHUNK_RAW_MAX 1476
+#define UPLOAD_CHUNK_RAW_MAX 0x8000
 
 bool json_parse_frame(const char *text, cJSON **out_root);
 bool json_check_version(cJSON *root, const char *req_id);

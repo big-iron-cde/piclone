@@ -56,7 +56,7 @@ reset, `"assert":false` to let it run.
 
 ### upload_rom
 
-A JSON-only chunked transfer (1476 raw bytes per chunk, base64-encoded):
+A JSON-only chunked transfer (up to 32768 raw bytes per chunk, base64-encoded; a full ROM fits in one chunk):
 
 1. `{"v":1,"cmd":"upload_rom","action":"begin","size":32768}`
 2. `{"v":1,"cmd":"upload_rom","action":"chunk","offset":0,"data":"<base64>"}`, repeat until
