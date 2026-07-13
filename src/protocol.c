@@ -96,6 +96,10 @@ bool proto_send_frame(const uint8_t *payload, size_t len) {
     if (!proto_write_byte(CTRL_STX)) {
         return false;
     }
+    /* Flush before waiting for ACK so ENQ/STX leave USB after idle gaps
+     * (e.g. capture cycle frames ~5 s apart). Without this the host can
+     * time out waiting for 0x05 while we block on ACK. */
+    stdio_flush();
     if (!wait_host_ack(3000)) {
         return false;
     }

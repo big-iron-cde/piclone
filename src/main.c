@@ -181,8 +181,9 @@ static void rom_task(void) {
         hardware_api_on_bus_cycle(addr, data, rwb);
 
         if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
+            /* Match protocol: RWB high → read → 0 */
             printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
-                   seq_counter, data, addr, rwb ? 1 : 0, current_hz);
+                   seq_counter, data, addr, rwb ? 0 : 1, current_hz);
             seq_counter++;
             if (seq_counter > 99) seq_counter = 1;
         }
@@ -249,6 +250,7 @@ int main(void) {
 
     while (true) {
         rom_task();
+        hardware_api_poll();
 
         if (absolute_time_diff_us(get_absolute_time(), next_blink) <= 0) {
             gpio_xor_mask(1u << PICO_DEFAULT_LED_PIN);

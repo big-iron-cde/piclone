@@ -18,6 +18,16 @@ static bool reset_asserted;
 static uint32_t read_max_cycles;
 static uint32_t read_cycle_count;
 
+/* Deferred capture TX — filled on PHI2 edge, sent from hardware_api_poll(). */
+static bool pending_cycle;
+static bool pending_done;
+static uint16_t pending_addr;
+static uint8_t pending_data;
+static uint8_t pending_rw; /* protocol: 0 = read, 1 = write */
+static uint32_t pending_seq;
+static bool pending_done_ok;
+static const char *pending_done_reason;
+
 /* upload_rom state */
 static bool upload_active;
 static uint32_t upload_expected;
@@ -188,6 +198,8 @@ static void cmd_read(cJSON *root, const char *req_id) {
         read_max_cycles = 10000;
     }
     read_cycle_count = 0;
+    pending_cycle = false;
+    pending_done = false;
     read_active = true;
     monitor_enabled = false;
 
@@ -256,6 +268,8 @@ void hardware_api_init(const hw_context_t *ctx) {
     read_active = false;
     monitor_enabled = false;
     reset_asserted = false;
+    pending_cycle = false;
+    pending_done = false;
     upload_reset_state();
 }
 
@@ -293,6 +307,8 @@ void hardware_api_handle_enq(void) {
 
     if (strcmp(cmd, "read") != 0) {
         read_active = false;
+        pending_cycle = false;
+        pending_done = false;
     }
 
     if (strcmp(cmd, "reset") == 0) {
@@ -330,14 +346,7 @@ static void send_read_event_done(bool ok, const char *reason, uint16_t addr) {
     cJSON_Delete(resp);
 }
 
-void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rw) {
-    last_addr = addr;
-    if (!read_active) {
-        return;
-    }
-
-    read_cycle_count++;
-
+static bool send_read_event_cycle(uint32_t seq, uint16_t addr, uint8_t data, uint8_t rw) {
     char addr_s[8];
     char data_s[4];
     snprintf(addr_s, sizeof(addr_s), "%04X", addr);
@@ -347,25 +356,62 @@ void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rw) {
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
     cJSON_AddStringToObject(resp, "type", "event");
     cJSON_AddStringToObject(resp, "event", "cycle");
-    cJSON_AddNumberToObject(resp, "seq", (double)read_cycle_count);
+    cJSON_AddNumberToObject(resp, "seq", (double)seq);
     cJSON_AddStringToObject(resp, "addr", addr_s);
     cJSON_AddStringToObject(resp, "data", data_s);
-    cJSON_AddNumberToObject(resp, "rw", rw ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "rw", (double)rw);
 
-    if (!json_send_object(resp)) {
-        cJSON_Delete(resp);
-        read_active = false;
-        send_read_event_done(false, "host_nack", addr);
+    bool ok = json_send_object(resp);
+    cJSON_Delete(resp);
+    return ok;
+}
+
+void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {
+    last_addr = addr;
+    if (!read_active) {
         return;
     }
-    cJSON_Delete(resp);
+    /* Do not queue another sample until the previous frame is flushed. */
+    if (pending_cycle || pending_done) {
+        return;
+    }
 
-    bool stp_fetch = (!rw && data == STP_OPCODE);
+    /* Protocol / docs: RWB high → read → rw=0; RWB low → write → rw=1. */
+    uint8_t rw_report = rwb_pin ? 0u : 1u;
+
+    read_cycle_count++;
+    pending_addr = addr;
+    pending_data = data;
+    pending_rw = rw_report;
+    pending_seq = read_cycle_count;
+    pending_cycle = true;
+
+    bool stp_fetch = (rw_report == 0u && data == STP_OPCODE);
     bool limit = (read_cycle_count >= read_max_cycles);
-
     if (stp_fetch || limit) {
         read_active = false;
-        send_read_event_done(true, stp_fetch ? "stp" : "max_cycles", addr);
+        pending_done_ok = true;
+        pending_done_reason = stp_fetch ? "stp" : "max_cycles";
+        pending_done = true;
+    }
+}
+
+void hardware_api_poll(void) {
+    if (pending_cycle) {
+        if (!send_read_event_cycle(pending_seq, pending_addr, pending_data, pending_rw)) {
+            pending_cycle = false;
+            read_active = false;
+            pending_done_ok = false;
+            pending_done_reason = "host_nack";
+            pending_done = true;
+        } else {
+            pending_cycle = false;
+        }
+    }
+
+    if (pending_done) {
+        send_read_event_done(pending_done_ok, pending_done_reason, pending_addr);
+        pending_done = false;
     }
 }
 
@@ -374,7 +420,7 @@ uint16_t hardware_api_last_addr(void) {
 }
 
 bool hardware_api_is_reading(void) {
-    return read_active;
+    return read_active || pending_cycle || pending_done;
 }
 
 bool hardware_api_monitor_enabled(void) {
