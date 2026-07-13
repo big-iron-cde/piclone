@@ -25,6 +25,10 @@
 #define PROTO_JSON_MAX   (48 * 1024)
 #define PROTO_BINARY_MAX 0x8000
 
+/* Optional hook called while waiting on USB so ROM/PHI2 sampling can continue. */
+typedef void (*proto_idle_fn)(void);
+void proto_set_idle_hook(proto_idle_fn fn);
+
 bool proto_read_byte(uint8_t *out, uint32_t timeout_ms);
 bool proto_write_byte(uint8_t b);
 

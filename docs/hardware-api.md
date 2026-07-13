@@ -44,8 +44,9 @@ All commands are JSON sent in a framed payload (host → Pico), and every reques
 |---|---|---|
 | **reset** | `{"v":1,"cmd":"reset","assert":true}` or `"assert":false` | `{"v":1,"ok":true,"cmd":"reset","asserted":true}` |
 | **upload_rom** | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; `commit` returns `reset_vector` |
-| **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | event stream then `{"type":"event","event":"done",...}` |
-| **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":0.2}` |
+| **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000,"phi2_hz":1000}` | ack, then poll `read_event` for cycle/`done` events |
+| **read_event** | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` while capture is armed |
+| **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":1000}` |
 | **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the ASCII bus table (off by default) |
 | **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
 
@@ -64,7 +65,7 @@ A JSON-only chunked transfer (up to 32768 raw bytes per chunk, base64-encoded; a
 3. `{"v":1,"cmd":"upload_rom","action":"commit"}` → `{"v":1,"ok":true,"reset_vector":"8000",...}`
 
 RESET is asserted for the duration of the upload so the CPU cannot fetch half-written ROM
-data, then released on commit.
+data. **Commit keeps RESET asserted** so the host can arm capture from `$8000` before release.
 
 ### read
 
@@ -85,9 +86,10 @@ To use this in automated tests, end your ROM with a **`STP` (`0xDB`)** instructi
 `BRK`, that opcode is `0x00`). Starting a `read` automatically disables the ASCII monitor
 on the Pico.
 
-At the default **0.2 Hz** clock, cycle events arrive about **once every 5 seconds**. The
-Romulan host client waits up to **12 s** per frame. A full capture from reset through STP
-typically takes **10–120 s** depending on program length.
+At the default **1 kHz** clock (~1 ms per PHI2 cycle), cycle events are polled quickly over
+USB. The Romulan host client uses a serial/frame timeout (default **30 s**, configurable)
+while draining `read_event` responses. A full capture from reset through STP is typically
+under a second for short demo programs.
 
 ### request_addr
 
@@ -111,7 +113,7 @@ api.monitor(enable=False)
 Example output:
 
 ```
-| 01 |  18  |  8000   |  0 |  0.2  |
+| 01 |  18  |  8000   |  0 | 1000.0 |
 ```
 
 Use **`read`** (JSON cycle stream) for automated tests; reserve **`monitor`** for manual

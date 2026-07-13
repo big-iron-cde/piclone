@@ -17,11 +17,9 @@ jobs:
       matrix:
         board: [pico, pico_w, pico2, pico2_w]
     steps:
-    - uses: actions/checkout@v7.0.0
-      with:
-        fetch-depth: 0
+    - uses: actions/checkout@v4
 
-    - name: Clone repo to ~/tools/pico-sdk
+    - name: Clone Pico SDK
       run: git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git /home/runner/tools/pico-sdk
 
     - name: Install ARM cross-compiler
@@ -32,7 +30,9 @@ jobs:
     - name: Create bin output folder
       run: mkdir -p bin
 
-    - name: Build for Each Pico
+    - name: Build for ${{ matrix.board }}
+      env:
+        PICO_SDK_PATH: /home/runner/tools/pico-sdk
       run: |
         cd src
         mkdir -p build && cd build
@@ -42,15 +42,24 @@ jobs:
         cd ../
         rm -rf build
 
-    - name: Create release
-      id: create-release
-      uses: softprops/action-gh-release@v3
+    - name: Upload UF2 artifact
+      uses: actions/upload-artifact@v4
       with:
-        files: |
-          bin/piclone-${{ matrix.board }}-${{ github.ref_name }}.uf2
+        name: piclone-${{ matrix.board }}-${{ github.ref_name }}
+        path: bin/piclone-${{ matrix.board }}-${{ github.ref_name }}.uf2
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all UF2 artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: bin
+        merge-multiple: true
+
+    - name: Create release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: bin/*.uf2
         make_latest: true
-
-    env:
-      PICO_SDK_PATH: /home/runner/tools/pico-sdk
-
-

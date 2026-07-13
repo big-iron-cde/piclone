@@ -68,7 +68,7 @@ The connection tables below list every net precisely.
 |---|---|---|
 | 65C02 pin 34 (RWB) | RAM pin 27 (WE#) | Write enable to RAM |
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
-| Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Fixed clock at 0.2 Hz (5 s per cycle) |
+| Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock at 1 kHz (default) |
 | Pico GP23 | 65C02 pin 34 (RWB) | Read/write sense for the bus monitor |
 | RAM pin 22 (OE#) | +3.3 V | Outputs disabled, writes only, avoids contention |
 

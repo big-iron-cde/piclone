@@ -32,7 +32,7 @@ The full per-chip pin maps. For the condensed bus/connection tables, see below:
 | 29 | GP22 | D7 io | 65C02 pin 26, RAM pin 19 |
 | 31 | GP26 | A15 in (chip enable) | 65C02 pin 25, RAM pin 20 |
 | 32 | GP27 | RESET drive (open-drain emulated) | 65C02 pin 40 (RESB) |
-| 34 | GP28 | PHI2 clock out (PWM, up to 1 MHz) | 65C02 pin 37 (PHI2) |
+| 34 | GP28 | PHI2 clock out (alarm square wave, 0.1–1000 Hz; default 1 kHz) | 65C02 pin 37 (PHI2) |
 | 36 | GP23 | RWB in (read/write bar) | 65C02 pin 34 (RWB) |
 
 ### Notes on the special GPIOs
@@ -44,8 +44,8 @@ The full per-chip pin maps. For the condensed bus/connection tables, see below:
   write cycles (`RWB low → 1`) in the bus monitor.
 - **GP27 (RESET):** configured as INPUT to release reset (10 kΩ pull-up runs the CPU),
   OUTPUT LOW to assert reset.
-- **GP28 (PHI2):** fixed clock output at **0.2 Hz** (5 s per cycle) for step-by-step
-  learning. Configurable in firmware for faster speeds.
+- **GP28 (PHI2):** clock output at **1 kHz** by default (~1 ms per cycle). Configurable via
+  `phi2_hz` on the `read` command (0.1–1000 Hz).
 
 ## W65C02S: 40-pin DIP (top view, notch up)
 
