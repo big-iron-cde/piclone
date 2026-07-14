@@ -167,10 +167,19 @@ static void rom_image_init(void) {
 // ─── ROM emulation (polling) ───────────────────────────────────────────
 
 static void rom_task(void) {
+    /* Idle-hook can nest during USB waits — never re-enter edge sampling. */
+    static bool busy;
+    if (busy) {
+        return;
+    }
+    busy = true;
+
     uint32_t pins = gpio_get_all();
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
     bool     a15  = (pins >> PIN_A15) & 1u;
 
+    /* Drive ROM data for the current address before sampling the rising edge
+     * so captured data matches the address on the bus. */
     if (rom_active) {
         if (a15) {
             uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
@@ -183,6 +192,10 @@ static void rom_task(void) {
     }
 
     if (phi2 && !phi2_last_state) {
+        /* Resample after driving so D0–D7 reflect this cycle's ROM byte. */
+        pins = gpio_get_all();
+        a15  = (pins >> PIN_A15) & 1u;
+
         bool reset_state = gpio_get(PIN_RESET);
         if (reset_state && !reset_last_state) {
             seq_counter = 1;
@@ -210,6 +223,7 @@ static void rom_task(void) {
         }
     }
     phi2_last_state = phi2;
+    busy = false;
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────────
