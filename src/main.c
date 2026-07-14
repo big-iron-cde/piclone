@@ -223,16 +223,21 @@ static void rom_task(void) {
             uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
             emit_bus_cycle(addr, data, true);
         } else {
-            /* Write: keep D0–D7 as inputs, wait into PHI2 high until CPU data
-             * is valid, then sample (falling-edge samples were too late and
-             * saw the following ROM fetch). */
+            /* Write: Hi-Z and keep sampling while PHI2 is high. A fixed settle
+             * is too early on Pico W (CYW43/idle timing) → data=00, and a
+             * falling-edge sample can be too late → next opcode. The last
+             * sample before PHI2 falls matches the CPU write byte on both. */
             gpio_set_dir_in_masked(DATA_MASK);
-            uint32_t settle_us = phi2_half_us / 2u;
-            if (settle_us < 2u) {
-                settle_us = 2u;
-            }
-            busy_wait_us(settle_us);
             uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
+            uint32_t guard_us = phi2_half_us + (phi2_half_us / 2u);
+            if (guard_us < 10u) {
+                guard_us = 10u;
+            }
+            absolute_time_t deadline = make_timeout_time_us(guard_us);
+            while (gpio_get(PIN_PHI2) && !time_reached(deadline)) {
+                data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
+                tight_loop_contents();
+            }
             emit_bus_cycle(addr, data, false);
         }
     } else if (rom_active) {
