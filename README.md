@@ -82,7 +82,9 @@ $8000 ─┼─────────────────┤
 $FFFF ─┴─────────────────┘
 ```
 
-When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the Pico serves `rom_image[addr & 0x7FFF]`. The same wire deselects the RAM, so no inverter or decoder is needed.
+When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the Pico serves
+`rom_image[addr & 0x7FFF]` on read cycles (RWB high) and stays Hi-Z on write cycles so the
+CPU owns the data bus. The same wire deselects the RAM, so no inverter or decoder is needed.
 
 ## Hardware
 
@@ -244,8 +246,9 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 | `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | poll `read_event` for cycle/`done` |
 | `read_event` | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` |
 | `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":1000}` |
+| `peek` | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as hex |
 | `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
-| `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
+| `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample) |
 
 > [!IMPORTANT]
 > Don't open a plain serial monitor on the port while using the Hardware API, and disable `monitor` before scripted upload/read; unstructured output corrupts framing. Use `--read-stp`, which disables it automatically.

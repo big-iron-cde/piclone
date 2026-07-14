@@ -47,8 +47,9 @@ All commands are JSON sent in a framed payload (host → Pico), and every reques
 | **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000,"phi2_hz":1000}` | ack, then poll `read_event` for cycle/`done` events |
 | **read_event** | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` while capture is armed |
 | **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":1000}` |
+| **peek** | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as a hex string |
 | **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the ASCII bus table (off by default) |
-| **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
+| **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample) |
 
 ### reset
 
@@ -95,10 +96,28 @@ under a second for short demo programs.
 
 Returns the last address sampled on the bus (updated every PHI2 rising edge).
 
+### peek
+
+Read back bytes from the currently loaded `rom_image[]`. Useful for verifying that an
+upload landed at the expected offsets before releasing RESET.
+
+```json
+{"v":1,"cmd":"peek","offset":28672,"count":16}
+```
+
+Response:
+
+```json
+{"v":1,"ok":true,"cmd":"peek","offset":28672,"count":16,"data":"A9...."}
+```
+
+`count` is capped at 64 bytes and clipped to the 32 KB ROM bounds.
+
 ### status
 
-Returns a full hardware snapshot: clock frequency, reset state, ROM active flag, and
-whether the ASCII monitor is enabled, in a single JSON response.
+Returns a full hardware snapshot: clock frequency, reset state, ROM active flag,
+whether the ASCII monitor is enabled, and the last bus sample (`last_addr`,
+`last_data`, `last_rw`) in a single JSON response.
 
 ### monitor
 

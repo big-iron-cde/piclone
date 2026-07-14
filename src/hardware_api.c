@@ -375,6 +375,43 @@ static void cmd_request_addr(const char *req_id) {
     cJSON_Delete(resp);
 }
 
+#define PEEK_MAX_COUNT 64
+
+static void cmd_peek(cJSON *root, const char *req_id) {
+    uint32_t offset = json_get_uint(root, "offset", 0);
+    uint32_t count = json_get_uint(root, "count", 1);
+
+    if (offset >= hw.rom_size) {
+        json_send_error(req_id, "bad_offset", "offset out of range");
+        return;
+    }
+    if (count == 0) {
+        count = 1;
+    }
+    if (count > PEEK_MAX_COUNT) {
+        count = PEEK_MAX_COUNT;
+    }
+    if (offset + count > hw.rom_size) {
+        count = (uint32_t)(hw.rom_size - offset);
+    }
+
+    char hex[(PEEK_MAX_COUNT * 2) + 1];
+    for (uint32_t i = 0; i < count; i++) {
+        snprintf(hex + (i * 2), 3, "%02X", hw.rom_image[offset + i]);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "peek");
+    cJSON_AddNumberToObject(resp, "offset", (double)offset);
+    cJSON_AddNumberToObject(resp, "count", (double)count);
+    cJSON_AddStringToObject(resp, "data", hex);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
 static void cmd_monitor(cJSON *root, const char *req_id) {
     monitor_enabled = json_get_bool(root, "enable", true);
 
@@ -390,7 +427,9 @@ static void cmd_monitor(cJSON *root, const char *req_id) {
 
 static void cmd_status(const char *req_id) {
     char addr[8];
+    char data[4];
     snprintf(addr, sizeof(addr), "%04X", last_addr);
+    snprintf(data, sizeof(data), "%02X", last_data);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
@@ -401,6 +440,8 @@ static void cmd_status(const char *req_id) {
     cJSON_AddBoolToObject(resp, "rom_active", *hw.rom_active);
     cJSON_AddBoolToObject(resp, "reset_asserted", reset_asserted);
     cJSON_AddStringToObject(resp, "last_addr", addr);
+    cJSON_AddStringToObject(resp, "last_data", data);
+    cJSON_AddNumberToObject(resp, "last_rw", (double)last_rw_report);
     cJSON_AddBoolToObject(resp, "read_active", read_active);
     cJSON_AddBoolToObject(resp, "monitor_enabled", monitor_enabled);
     cJSON_AddBoolToObject(resp, "upload_active", upload_active);
@@ -453,13 +494,14 @@ void hardware_api_handle_enq(void) {
     }
 
     /* Keep an armed capture alive across read_event polls, reset, and
-     * non-destructive queries (status / request_addr). */
+     * non-destructive queries (status / request_addr / peek). */
     if (
         strcmp(cmd, "read") != 0
         && strcmp(cmd, "read_event") != 0
         && strcmp(cmd, "reset") != 0
         && strcmp(cmd, "status") != 0
         && strcmp(cmd, "request_addr") != 0
+        && strcmp(cmd, "peek") != 0
     ) {
         read_active = false;
         capture_queue_clear();
@@ -475,6 +517,8 @@ void hardware_api_handle_enq(void) {
         cmd_read_event(req_id);
     } else if (strcmp(cmd, "request_addr") == 0) {
         cmd_request_addr(req_id);
+    } else if (strcmp(cmd, "peek") == 0) {
+        cmd_peek(root, req_id);
     } else if (strcmp(cmd, "monitor") == 0) {
         cmd_monitor(root, req_id);
     } else if (strcmp(cmd, "status") == 0) {

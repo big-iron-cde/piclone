@@ -170,9 +170,10 @@ static void rom_task(void) {
     uint32_t pins = gpio_get_all();
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
     bool     a15  = (pins >> PIN_A15) & 1u;
+    bool     rwb  = (pins >> PIN_RWB) & 1u;
 
     if (rom_active) {
-        if (a15) {
+        if (a15 && rwb) {
             uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
             uint8_t  byte = rom_image[addr];
             gpio_set_dir_out_masked(DATA_MASK);
@@ -197,7 +198,6 @@ static void rom_task(void) {
         uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
         if (a15) addr |= 0x8000u;
         uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
-        bool rwb = (pins >> PIN_RWB) & 1u;
 
         hardware_api_on_bus_cycle(addr, data, rwb);
 
