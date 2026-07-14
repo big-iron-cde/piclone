@@ -185,10 +185,7 @@ static void emit_bus_cycle(uint16_t addr, uint8_t data, bool a15_read) {
 
 static void rom_task(void) {
     /* Idle-hook can nest during USB waits — never re-enter edge sampling. */
-    static bool     busy;
-    static bool     write_pending;
-    static uint16_t write_addr;
-
+    static bool busy;
     if (busy) {
         return;
     }
@@ -196,26 +193,12 @@ static void rom_task(void) {
 
     uint32_t pins = gpio_get_all();
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
-    bool     a15  = (pins >> PIN_A15) & 1u;
-
-    /* Drive ROM data for the current address before sampling the rising edge
-     * so captured data matches the address on the bus. */
-    if (rom_active) {
-        if (a15) {
-            uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
-            uint8_t  byte = rom_image[addr];
-            gpio_set_dir_out_masked(DATA_MASK);
-            gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
-        } else {
-            gpio_set_dir_in_masked(DATA_MASK);
-        }
-    }
 
     if (phi2 && !phi2_last_state) {
-        /* Rising edge: address valid. Read data is valid now; write data is
-         * only valid later in PHI2 high — defer those until the falling edge. */
+        /* Rising edge — handle capture before driving the next ROM byte so a
+         * deferred write sample cannot pick up Pico-driven opcode data. */
         pins = gpio_get_all();
-        a15  = (pins >> PIN_A15) & 1u;
+        bool a15 = (pins >> PIN_A15) & 1u;
 
         bool reset_state = gpio_get(PIN_RESET);
         if (reset_state && !reset_last_state) {
@@ -228,27 +211,41 @@ static void rom_task(void) {
         }
         reset_last_state = reset_state;
 
-        /* If a prior write never saw a falling edge, flush with a late sample. */
-        if (write_pending) {
-            uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
-            emit_bus_cycle(write_addr, data, false);
-            write_pending = false;
-        }
-
         uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
         if (a15) {
             addr |= 0x8000u;
+            if (rom_active) {
+                uint8_t byte = rom_image[addr & 0x7FFFu];
+                gpio_set_dir_out_masked(DATA_MASK);
+                gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
+            }
+            pins = gpio_get_all();
             uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
             emit_bus_cycle(addr, data, true);
         } else {
-            write_addr = addr;
-            write_pending = true;
+            /* Write: keep D0–D7 as inputs, wait into PHI2 high until CPU data
+             * is valid, then sample (falling-edge samples were too late and
+             * saw the following ROM fetch). */
+            gpio_set_dir_in_masked(DATA_MASK);
+            uint32_t settle_us = phi2_half_us / 2u;
+            if (settle_us < 2u) {
+                settle_us = 2u;
+            }
+            busy_wait_us(settle_us);
+            uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
+            emit_bus_cycle(addr, data, false);
         }
-    } else if (!phi2 && phi2_last_state && write_pending) {
-        /* Falling edge: CPU write data is stable — sample and emit once. */
-        uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
-        emit_bus_cycle(write_addr, data, false);
-        write_pending = false;
+    } else if (rom_active) {
+        /* Hold ROM drive / Hi-Z for the rest of the cycle. */
+        bool a15 = (pins >> PIN_A15) & 1u;
+        if (a15) {
+            uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
+            uint8_t  byte = rom_image[addr];
+            gpio_set_dir_out_masked(DATA_MASK);
+            gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
+        } else {
+            gpio_set_dir_in_masked(DATA_MASK);
+        }
     }
 
     phi2_last_state = phi2;
