@@ -166,9 +166,29 @@ static void rom_image_init(void) {
 
 // ─── ROM emulation (polling) ───────────────────────────────────────────
 
+/* Emit one captured cycle to the Hardware API and optional ASCII monitor. */
+static void emit_bus_cycle(uint16_t addr, uint8_t data, bool a15_read) {
+    /* Infer RWB from A15: ROM (A15=1) = read, RAM (A15=0) = write.
+     * GP23 is not a usable header pin for CPU RWB on Pico 2. */
+    hardware_api_on_bus_cycle(addr, data, a15_read);
+
+    if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
+        /* Match protocol: read → 0, write → 1 */
+        printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
+               seq_counter, data, addr, a15_read ? 0 : 1, current_hz);
+        seq_counter++;
+        if (seq_counter > 99) {
+            seq_counter = 1;
+        }
+    }
+}
+
 static void rom_task(void) {
     /* Idle-hook can nest during USB waits — never re-enter edge sampling. */
-    static bool busy;
+    static bool     busy;
+    static bool     write_pending;
+    static uint16_t write_addr;
+
     if (busy) {
         return;
     }
@@ -192,7 +212,8 @@ static void rom_task(void) {
     }
 
     if (phi2 && !phi2_last_state) {
-        /* Resample after driving so D0–D7 reflect this cycle's ROM byte. */
+        /* Rising edge: address valid. Read data is valid now; write data is
+         * only valid later in PHI2 high — defer those until the falling edge. */
         pins = gpio_get_all();
         a15  = (pins >> PIN_A15) & 1u;
 
@@ -207,23 +228,29 @@ static void rom_task(void) {
         }
         reset_last_state = reset_state;
 
-        uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
-        if (a15) addr |= 0x8000u;
-        uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
-        /* Infer RWB from A15: ROM (A15=1) = read, RAM (A15=0) = write.
-         * GP23 is not a usable header pin for CPU RWB on Pico 2. */
-        bool rwb_for_api = a15; /* high = read for hardware_api_on_bus_cycle */
-
-        hardware_api_on_bus_cycle(addr, data, rwb_for_api);
-
-        if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
-            /* Match protocol: read → 0, write → 1 */
-            printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
-                   seq_counter, data, addr, a15 ? 0 : 1, current_hz);
-            seq_counter++;
-            if (seq_counter > 99) seq_counter = 1;
+        /* If a prior write never saw a falling edge, flush with a late sample. */
+        if (write_pending) {
+            uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
+            emit_bus_cycle(write_addr, data, false);
+            write_pending = false;
         }
+
+        uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
+        if (a15) {
+            addr |= 0x8000u;
+            uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
+            emit_bus_cycle(addr, data, true);
+        } else {
+            write_addr = addr;
+            write_pending = true;
+        }
+    } else if (!phi2 && phi2_last_state && write_pending) {
+        /* Falling edge: CPU write data is stable — sample and emit once. */
+        uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
+        emit_bus_cycle(write_addr, data, false);
+        write_pending = false;
     }
+
     phi2_last_state = phi2;
     busy = false;
 }

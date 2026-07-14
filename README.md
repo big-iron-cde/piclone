@@ -288,7 +288,7 @@ uv run romulan program.txt --build --upload             # demo program ends in S
 uv run romulan hardware capture --until stp --port /dev/ttyACM0
 ```
 
-`read_until_stp()` captures one frame per PHI2 rising edge until the CPU fetches `STP` or `max_cycles` is reached. At the default **1 kHz** clock, host polling keeps up via a multi-slot firmware queue.
+`read_until_stp()` captures one frame per bus cycle until the CPU fetches `STP` or `max_cycles` is reached. Address (and ROM read data) are sampled on the PHI2 rising edge; **write data** is sampled on the falling edge so STA bytes are valid. At the default **1 kHz** clock, host polling keeps up via a multi-slot firmware queue.
 
 ## Deployment
 
