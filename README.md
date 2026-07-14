@@ -157,7 +157,7 @@ The same address and data bus continues from the 65C02 to the HM62256 RAM (orang
 | 65C02 pin 34 (RWB) | RAM pin 27 (WE#) | CPU write-enable to RAM |
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
 | Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock at 1 kHz (default) |
-| Pico GP23 | 65C02 pin 34 (RWB) | Read/write sense for bus monitor |
+| *(optional)* Pico GP23 | 65C02 pin 34 (RWB) | Not used for protocol `rw` on Pico 2; firmware infers from A15 |
 | RAM pin 22 (OE#) | +3.3 V | Outputs disabled (writes only), avoids bus contention |
 
 ### Pull-up resistors (6 × 10 kΩ, all to +3.3 V)
@@ -275,6 +275,8 @@ A captured bus cycle looks like:
 ```json
 {"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
 ```
+
+`rw` is **0 = read**, **1 = write**. On this build it is **inferred from A15** (ROM `$8000–$FFFF` → read, RAM `$0000–$7FFF` → write) because Pico 2 GP23 is not a usable header pin for CPU RWB. CPU RWB still drives RAM `WE#` for real writes. Store cycles should show `rw=1`; ROM fetches (including STP `$DB`) show `rw=0`.
 
 ## Testing
 

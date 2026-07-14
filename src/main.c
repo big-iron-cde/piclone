@@ -210,14 +210,16 @@ static void rom_task(void) {
         uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
         if (a15) addr |= 0x8000u;
         uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
-        bool rwb = (pins >> PIN_RWB) & 1u;
+        /* Infer RWB from A15: ROM (A15=1) = read, RAM (A15=0) = write.
+         * GP23 is not a usable header pin for CPU RWB on Pico 2. */
+        bool rwb_for_api = a15; /* high = read for hardware_api_on_bus_cycle */
 
-        hardware_api_on_bus_cycle(addr, data, rwb);
+        hardware_api_on_bus_cycle(addr, data, rwb_for_api);
 
         if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
-            /* Match protocol: RWB high → read → 0 */
+            /* Match protocol: read → 0, write → 1 */
             printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
-                   seq_counter, data, addr, rwb ? 0 : 1, current_hz);
+                   seq_counter, data, addr, a15 ? 0 : 1, current_hz);
             seq_counter++;
             if (seq_counter > 99) seq_counter = 1;
         }
