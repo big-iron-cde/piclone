@@ -76,6 +76,10 @@ Captures bus activity as JSON. Streams one event per PHI2 rising edge until the 
 {"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
 ```
 
+`rw` is **0 = read**, **1 = write**. On this build it is **inferred from A15** (ROM
+`$8000–$FFFF` → read, RAM `$0000–$7FFF` → write) because Pico 2 GP23 cannot sense CPU
+RWB on the header. STP stop still uses a ROM read of `$DB`.
+
 Final event:
 
 ```json

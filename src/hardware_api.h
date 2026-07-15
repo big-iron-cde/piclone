@@ -27,7 +27,8 @@ void hardware_api_init(const hw_context_t *ctx);
 void hardware_api_handle_enq(void);
 
 /* Call from rom_task on each PHI2 rising-edge sample.
- * `rwb_pin` is the raw RWB GPIO level (1 = high). */
+ * `rwb_pin` is read-high sense (1 = read, 0 = write). On this build the
+ * caller derives it from A15, not from CPU RWB / GP23. */
 void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin);
 
 /* Send any pending capture frames (call from main after rom_task). */
