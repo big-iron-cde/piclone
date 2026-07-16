@@ -166,7 +166,31 @@ static void rom_image_init(void) {
 
 // ─── ROM emulation (polling) ───────────────────────────────────────────
 
+/* Emit one captured cycle to the Hardware API and optional ASCII monitor. */
+static void emit_bus_cycle(uint16_t addr, uint8_t data, bool a15_read) {
+    /* Infer RWB from A15: ROM (A15=1) = read, RAM (A15=0) = write.
+     * GP23 is not a usable header pin for CPU RWB on Pico 2. */
+    hardware_api_on_bus_cycle(addr, data, a15_read);
+
+    if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
+        /* Match protocol: read → 0, write → 1 */
+        printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
+               seq_counter, data, addr, a15_read ? 0 : 1, current_hz);
+        seq_counter++;
+        if (seq_counter > 99) {
+            seq_counter = 1;
+        }
+    }
+}
+
 static void rom_task(void) {
+    /* Idle-hook can nest during USB waits — never re-enter edge sampling. */
+    static bool busy;
+    if (busy) {
+        return;
+    }
+    busy = true;
+
     uint32_t pins = gpio_get_all();
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
     bool     a15  = (pins >> PIN_A15) & 1u;
@@ -184,6 +208,11 @@ static void rom_task(void) {
     }
 
     if (phi2 && !phi2_last_state) {
+        /* Rising edge — handle capture before driving the next ROM byte so a
+         * deferred write sample cannot pick up Pico-driven opcode data. */
+        pins = gpio_get_all();
+        bool a15 = (pins >> PIN_A15) & 1u;
+
         bool reset_state = gpio_get(PIN_RESET);
         if (reset_state && !reset_last_state) {
             seq_counter = 1;
@@ -207,9 +236,49 @@ static void rom_task(void) {
                    seq_counter, data, addr, rwb ? 0 : 1, current_hz);
             seq_counter++;
             if (seq_counter > 99) seq_counter = 1;
+        if (a15) {
+            addr |= 0x8000u;
+            if (rom_active) {
+                uint8_t byte = rom_image[addr & 0x7FFFu];
+                gpio_set_dir_out_masked(DATA_MASK);
+                gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
+            }
+            pins = gpio_get_all();
+            uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
+            emit_bus_cycle(addr, data, true);
+        } else {
+            /* Write: Hi-Z and keep sampling while PHI2 is high. A fixed settle
+             * is too early on Pico W (CYW43/idle timing) → data=00, and a
+             * falling-edge sample can be too late → next opcode. The last
+             * sample before PHI2 falls matches the CPU write byte on both. */
+            gpio_set_dir_in_masked(DATA_MASK);
+            uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
+            uint32_t guard_us = phi2_half_us + (phi2_half_us / 2u);
+            if (guard_us < 10u) {
+                guard_us = 10u;
+            }
+            absolute_time_t deadline = make_timeout_time_us(guard_us);
+            while (gpio_get(PIN_PHI2) && !time_reached(deadline)) {
+                data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
+                tight_loop_contents();
+            }
+            emit_bus_cycle(addr, data, false);
+        }
+    } else if (rom_active) {
+        /* Hold ROM drive / Hi-Z for the rest of the cycle. */
+        bool a15 = (pins >> PIN_A15) & 1u;
+        if (a15) {
+            uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
+            uint8_t  byte = rom_image[addr];
+            gpio_set_dir_out_masked(DATA_MASK);
+            gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
+        } else {
+            gpio_set_dir_in_masked(DATA_MASK);
         }
     }
+
     phi2_last_state = phi2;
+    busy = false;
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────────

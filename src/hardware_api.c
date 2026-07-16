@@ -531,7 +531,8 @@ void hardware_api_handle_enq(void) {
 }
 
 void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {
-    /* Protocol / docs: RWB high → read → rw=0; RWB low → write → rw=1. */
+    /* rwb_pin is read-high sense (not necessarily GPIO GP23). On this board
+     * main.c passes A15: ROM reads (high) → rw=0; RAM writes (low) → rw=1. */
     uint8_t rw_report = rwb_pin ? 0u : 1u;
 
     last_addr = addr;
