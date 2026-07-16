@@ -194,13 +194,12 @@ static void rom_task(void) {
     uint32_t pins = gpio_get_all();
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
     bool     a15  = (pins >> PIN_A15) & 1u;
-    bool     rwb  = (pins >> PIN_RWB) & 1u;
 
     if (hardware_api_drive_enabled()) {
         gpio_set_dir_out_masked(DATA_MASK);
         gpio_put_masked(DATA_MASK, (uint32_t)hardware_api_drive_value() << PIN_D_FIRST);
     } else if (rom_active) {
-        if (a15 && rwb) {
+        if (a15) {
             uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
             uint8_t  byte = rom_image[addr];
             gpio_set_dir_out_masked(DATA_MASK);
@@ -229,24 +228,8 @@ static void rom_task(void) {
 
         uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
         if (a15) addr |= 0x8000u;
-        uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
 
-        hardware_api_on_bus_cycle(addr, data, rwb);
-
-        if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
-            /* Match protocol: RWB high → read → 0 */
-            printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
-                   seq_counter, data, addr, rwb ? 0 : 1, current_hz);
-            seq_counter++;
-            if (seq_counter > 99) seq_counter = 1;
-        }
         if (a15) {
-            addr |= 0x8000u;
-            if (rom_active) {
-                uint8_t byte = rom_image[addr & 0x7FFFu];
-                gpio_set_dir_out_masked(DATA_MASK);
-                gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
-            }
             pins = gpio_get_all();
             uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
             emit_bus_cycle(addr, data, true);
@@ -267,17 +250,6 @@ static void rom_task(void) {
                 tight_loop_contents();
             }
             emit_bus_cycle(addr, data, false);
-        }
-    } else if (rom_active) {
-        /* Hold ROM drive / Hi-Z for the rest of the cycle. */
-        bool a15 = (pins >> PIN_A15) & 1u;
-        if (a15) {
-            uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
-            uint8_t  byte = rom_image[addr];
-            gpio_set_dir_out_masked(DATA_MASK);
-            gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
-        } else {
-            gpio_set_dir_in_masked(DATA_MASK);
         }
     }
 
