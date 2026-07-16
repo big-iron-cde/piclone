@@ -239,6 +239,7 @@ static void rom_task(void) {
                    seq_counter, data, addr, rwb ? 0 : 1, current_hz);
             seq_counter++;
             if (seq_counter > 99) seq_counter = 1;
+        }
         if (a15) {
             addr |= 0x8000u;
             if (rom_active) {
