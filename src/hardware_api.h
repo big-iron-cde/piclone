@@ -2,7 +2,7 @@
  * Hardware API — JSON v1 commands over framed serial
  *
  * All payloads require {"v":1,...}. Commands:
- *   reset, upload_rom (begin/chunk/commit), read, request_addr, monitor, status
+ *   reset, upload_rom (begin/chunk/commit), read, request_addr, peek, monitor, status
  */
 
 #ifndef HARDWARE_API_H
@@ -19,6 +19,8 @@ typedef struct {
     float   *current_hz;
     void   (*reset_assert)(void);
     void   (*reset_release)(void);
+    /* Optional: poll PHI2 / ROM emulation while blocking in a command (peek). */
+    void   (*bus_poll)(void);
 } hw_context_t;
 
 void hardware_api_init(const hw_context_t *ctx);

@@ -47,6 +47,7 @@ All commands are JSON sent in a framed payload (host → Pico), and every reques
 | **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000,"phi2_hz":1000}` | ack, then poll `read_event` for cycle/`done` events |
 | **read_event** | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` while capture is armed |
 | **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":1000}` |
+| **peek** | `{"v":1,"cmd":"peek","addr":"4000"}` | `{"v":1,"ok":true,"cmd":"peek","addr":"4000","data":"14"}` |
 | **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the ASCII bus table (off by default) |
 | **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
 
@@ -98,6 +99,17 @@ under a second for short demo programs.
 ### request_addr
 
 Returns the last address sampled on the bus (updated every PHI2 rising edge).
+
+### peek
+
+Live bus/RAM peek: asserts RESET, patches `LDA $addr` / `STP` at `$8000`, releases
+RESET, samples the data byte on the bus cycle whose address matches `addr`, then
+re-asserts RESET and restores the previous ROM bytes. `addr` is a hex string
+(`0000`–`FFFF`). Errors: `timeout` (STP not seen), `no_cycle` (no matching address),
+`busy` (capture/upload in progress).
+
+This is distinct from reading the Pico's `rom_image[]` buffer — it observes a real
+CPU read cycle (e.g. RAM at `$4000` after an STA).
 
 ### status
 

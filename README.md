@@ -244,6 +244,7 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 | `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | poll `read_event` for cycle/`done` |
 | `read_event` | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` |
 | `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":1000}` |
+| `peek` | `{"v":1,"cmd":"peek","addr":"4000"}` | `{"v":1,"ok":true,"addr":"4000","data":"14"}` |
 | `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
 | `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
 

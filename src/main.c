@@ -271,6 +271,7 @@ int main(void) {
         .current_hz    = &current_hz,
         .reset_assert  = reset_assert,
         .reset_release = reset_release,
+        .bus_poll      = rom_task,
     };
     hardware_api_init(&ctx);
     proto_set_idle_hook(rom_task);

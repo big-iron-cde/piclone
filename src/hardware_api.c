@@ -6,6 +6,7 @@
 #include "hardware/gpio.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define STP_OPCODE 0xDB
@@ -43,6 +44,13 @@ static bool upload_active;
 static uint32_t upload_expected;
 static uint32_t upload_received;
 static uint32_t upload_next_offset;
+
+/* Live RAM/bus peek (temporary LDA abs / STP stub). */
+static bool     peek_active;
+static uint16_t peek_target;
+static bool     peek_seen_data;
+static uint8_t  peek_data;
+static bool     peek_done_stp;
 
 static void capture_queue_clear(void) {
     capture_q_head = 0;
@@ -408,6 +416,95 @@ static void cmd_status(const char *req_id) {
     cJSON_Delete(resp);
 }
 
+/*
+ * Live peek: patch LDA abs / STP at $8000, run until STP, return data seen
+ * on the bus cycle whose address matches the request (RAM or ROM).
+ */
+static void cmd_peek(cJSON *root, const char *req_id) {
+    if (read_active) {
+        json_send_error(req_id, "busy", "capture armed; finish or abort read first");
+        return;
+    }
+    if (upload_active) {
+        json_send_error(req_id, "busy", "upload in progress");
+        return;
+    }
+    if (!hw.rom_image || hw.rom_size < 4 || !hw.bus_poll) {
+        json_send_error(req_id, "unavailable", "peek requires ROM image and bus_poll");
+        return;
+    }
+
+    const char *addr_s = json_get_string(root, "addr");
+    if (!addr_s || addr_s[0] == '\0') {
+        json_send_error(req_id, "bad_request", "missing addr");
+        return;
+    }
+    char *end = NULL;
+    unsigned long parsed = strtoul(addr_s, &end, 16);
+    if (end == addr_s || parsed > 0xFFFFul) {
+        json_send_error(req_id, "bad_request", "addr must be 0000-FFFF hex");
+        return;
+    }
+    uint16_t target = (uint16_t)parsed;
+
+    hw.reset_assert();
+    reset_asserted = true;
+
+    uint8_t saved[4];
+    memcpy(saved, hw.rom_image, 4);
+    hw.rom_image[0] = 0xAD; /* LDA abs */
+    hw.rom_image[1] = (uint8_t)(target & 0xFFu);
+    hw.rom_image[2] = (uint8_t)((target >> 8) & 0xFFu);
+    hw.rom_image[3] = STP_OPCODE;
+    *hw.rom_active = true;
+
+    peek_target = target;
+    peek_seen_data = false;
+    peek_data = 0;
+    peek_done_stp = false;
+    peek_active = true;
+
+    sleep_ms(2);
+    hw.reset_release();
+    reset_asserted = false;
+
+    /* ~64 bus cycles at 1 kHz is ~64 ms; allow headroom for USB/idle. */
+    absolute_time_t deadline = make_timeout_time_ms(500);
+    while (!peek_done_stp && !time_reached(deadline)) {
+        hw.bus_poll();
+        tight_loop_contents();
+    }
+
+    hw.reset_assert();
+    reset_asserted = true;
+    peek_active = false;
+    memcpy(hw.rom_image, saved, 4);
+
+    if (!peek_done_stp) {
+        json_send_error(req_id, "timeout", "peek did not reach STP");
+        return;
+    }
+    if (!peek_seen_data) {
+        json_send_error(req_id, "no_cycle", "no bus cycle matched addr");
+        return;
+    }
+
+    char out_addr[8];
+    char out_data[4];
+    snprintf(out_addr, sizeof(out_addr), "%04X", target);
+    snprintf(out_data, sizeof(out_data), "%02X", peek_data);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "peek");
+    cJSON_AddStringToObject(resp, "addr", out_addr);
+    cJSON_AddStringToObject(resp, "data", out_data);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
 void hardware_api_init(const hw_context_t *ctx) {
     hw = *ctx;
     last_addr = 0;
@@ -418,6 +515,9 @@ void hardware_api_init(const hw_context_t *ctx) {
     reset_asserted = false;
     capture_queue_clear();
     upload_reset_state();
+    peek_active = false;
+    peek_seen_data = false;
+    peek_done_stp = false;
 }
 
 void hardware_api_handle_enq(void) {
@@ -479,6 +579,8 @@ void hardware_api_handle_enq(void) {
         cmd_monitor(root, req_id);
     } else if (strcmp(cmd, "status") == 0) {
         cmd_status(req_id);
+    } else if (strcmp(cmd, "peek") == 0) {
+        cmd_peek(root, req_id);
     } else {
         json_send_error(req_id, "unknown_cmd", cmd);
     }
@@ -495,6 +597,18 @@ void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {
     last_data = data;
     last_rw_report = rw_report;
 
+    if (peek_active) {
+        if (addr == peek_target) {
+            peek_data = data;
+            peek_seen_data = true;
+        }
+        /* STP opcode fetch from ROM (A15=1). */
+        if (rwb_pin && data == STP_OPCODE && (addr & 0x8000u)) {
+            peek_done_stp = true;
+        }
+        return;
+    }
+
     if (!read_active) {
         return;
     }
@@ -510,7 +624,7 @@ uint16_t hardware_api_last_addr(void) {
 }
 
 bool hardware_api_is_reading(void) {
-    return read_active || capture_q_count > 0 || pending_done;
+    return peek_active || read_active || capture_q_count > 0 || pending_done;
 }
 
 bool hardware_api_monitor_enabled(void) {
