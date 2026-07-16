@@ -40,8 +40,9 @@ The full per-chip pin maps. For the condensed bus/connection tables, see below:
 - **GP26 (A15):** also drives the RAM's `CE#`. When A15 = 1 (ROM region) the RAM is
   deselected and the Pico drives data; when A15 = 0 (RAM region) the Pico stays Hi-Z and
   the RAM drives data. Same wire, both purposes.
-- **GP23 (RWB):** the Pico reads this to distinguish CPU read cycles (`RWB high → 0`) from
-  write cycles (`RWB low → 1`) in the bus monitor.
+- **GP23 (RWB):** not used for protocol `rw` on Pico 2 (GP23 is not a usable header
+  pin). Capture/monitor **infer** read vs write from **A15** (ROM = read, RAM = write).
+  CPU RWB still ties to RAM `WE#` for real writes.
 - **GP27 (RESET):** configured as INPUT to release reset (10 kΩ pull-up runs the CPU),
   OUTPUT LOW to assert reset.
 - **GP28 (PHI2):** clock output at **1 kHz** by default (~1 ms per cycle). Configurable via

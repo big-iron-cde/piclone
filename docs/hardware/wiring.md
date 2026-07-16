@@ -69,7 +69,7 @@ The connection tables below list every net precisely.
 | 65C02 pin 34 (RWB) | RAM pin 27 (WE#) | Write enable to RAM |
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
 | Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock at 1 kHz (default) |
-| Pico GP23 | 65C02 pin 34 (RWB) | Read/write sense for the bus monitor |
+| *(optional)* Pico GP23 | 65C02 pin 34 (RWB) | Not used for `rw` on Pico 2; firmware infers from A15 |
 | RAM pin 22 (OE#) | +3.3 V | Outputs disabled, writes only, avoids contention |
 
 ## Pull-up resistors (6 × 10 kΩ, all top to +3.3 V)
