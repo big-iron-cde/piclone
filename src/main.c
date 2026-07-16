@@ -172,7 +172,10 @@ static void rom_task(void) {
     bool     a15  = (pins >> PIN_A15) & 1u;
     bool     rwb  = (pins >> PIN_RWB) & 1u;
 
-    if (rom_active) {
+    if (hardware_api_drive_enabled()) {
+        gpio_set_dir_out_masked(DATA_MASK);
+        gpio_put_masked(DATA_MASK, (uint32_t)hardware_api_drive_value() << PIN_D_FIRST);
+    } else if (rom_active) {
         if (a15 && rwb) {
             uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
             uint8_t  byte = rom_image[addr];

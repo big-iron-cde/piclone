@@ -44,12 +44,14 @@ All commands are JSON sent in a framed payload (host → Pico), and every reques
 |---|---|---|
 | **reset** | `{"v":1,"cmd":"reset","assert":true}` or `"assert":false` | `{"v":1,"ok":true,"cmd":"reset","asserted":true}` |
 | **upload_rom** | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; `commit` returns `reset_vector` |
-| **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000,"phi2_hz":1000}` | ack, then poll `read_event` for cycle/`done` events |
-| **read_event** | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` while capture is armed |
+| **read** | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000,"batch_size":32,"phi2_hz":1000,"release_reset":true}` | ack, then poll `read_event` for batched cycle/`done` events |
+| **read_event** | `{"v":1,"cmd":"read_event","batch_size":32}` | `cycles` batch / `done` / `none` while capture is armed |
+| **clock** | `{"v":1,"cmd":"clock","hz":1000}` | `{"v":1,"ok":true,"cmd":"clock","hz":1000}` |
 | **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":1000}` |
 | **peek** | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as a hex string |
 | **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the ASCII bus table (off by default) |
-| **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample) |
+| **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample, raw pins) |
+| **drive** | `{"v":1,"cmd":"drive","value":"EA"}` or `{"v":1,"cmd":"drive","enable":false}` | force D0–D7 to a byte, or release the bus |
 
 ### reset
 
@@ -70,11 +72,12 @@ data. **Commit keeps RESET asserted** so the host can arm capture from `$8000` b
 
 ### read
 
-Captures bus activity as JSON. Streams one event per PHI2 rising edge until the CPU
-**fetches STP** (`0xDB` on a read cycle) or `max_cycles` is reached. Each cycle event:
+Captures bus activity as JSON. Streams batched events until the CPU **fetches STP**
+(`0xDB` on a read cycle) or `max_cycles` is reached. Each batch contains up to `batch_size`
+cycles:
 
 ```json
-{"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
+{"v":1,"type":"event","event":"cycles","cycles":[{"seq":1,"addr":"8000","data":"18","rw":0}]}
 ```
 
 Final event:
@@ -85,7 +88,16 @@ Final event:
 
 To use this in automated tests, end your ROM with a **`STP` (`0xDB`)** instruction (not
 `BRK`, that opcode is `0x00`). Starting a `read` automatically disables the ASCII monitor
-on the Pico.
+on the Pico and releases any active `drive` diagnostic.
+
+By default `read` also **releases RESET** immediately after arming capture (`release_reset`
+defaults to `true`). This ensures the first captured cycle is the reset-vector fetch after
+the `upload_rom commit` workflow leaves the CPU held in reset. Set `release_reset:false` if
+you want to arm capture while keeping the CPU halted.
+
+`batch_size` defaults to `1` if omitted, and is clamped to a firmware maximum (64). Hosts
+that do not send `batch_size` receive the legacy single-`cycle` event; hosts that send it
+receive the batched `cycles` array. The Romulan client defaults to `32`.
 
 At the default **1 kHz** clock (~1 ms per PHI2 cycle), cycle events are polled quickly over
 USB. The Romulan host client uses a serial/frame timeout (default **30 s**, configurable)
@@ -116,8 +128,20 @@ Response:
 ### status
 
 Returns a full hardware snapshot: clock frequency, reset state, ROM active flag,
-whether the ASCII monitor is enabled, and the last bus sample (`last_addr`,
-`last_data`, `last_rw`) in a single JSON response.
+whether the ASCII monitor is enabled, the last bus sample (`last_addr`, `last_data`,
+`last_rw`), the active `drive` diagnostic state, and the raw pin levels (`resb`, `rwb`,
+`a15`, `phi2`) in a single JSON response.
+
+```json
+{
+  "v":1,"ok":true,"cmd":"status",
+  "phi2_hz":1000.0,"rom_active":true,"reset_asserted":false,
+  "last_addr":"8000","last_data":"18","last_rw":0,
+  "read_active":false,"monitor_enabled":false,"upload_active":false,
+  "drive_enabled":false,
+  "resb":1,"rwb":1,"a15":1,"phi2":1
+}
+```
 
 ### monitor
 
@@ -134,6 +158,48 @@ Example output:
 ```
 | 01 |  18  |  8000   |  0 | 1000.0 |
 ```
+
+### clock
+
+Sets the PHI2 clock frequency independently of starting a capture. Accepts `"hz"` as a
+float in the range **0.1–1000.0**. The response echoes the actual frequency after rounding
+to the nearest microsecond half-period.
+
+```json
+{"v":1,"cmd":"clock","hz":100}
+```
+
+Response:
+
+```json
+{"v":1,"ok":true,"cmd":"clock","hz":100}
+```
+
+### drive
+
+Diagnostic command that forces the Pico to drive a byte onto D0–D7, or releases the bus
+and returns to normal ROM emulation. The CPU should be held in reset before forcing the
+data bus, otherwise the Pico and CPU contend.
+
+Force the bus:
+
+```json
+{"v":1,"cmd":"drive","value":"EA"}
+```
+
+Release the bus:
+
+```json
+{"v":1,"cmd":"drive","enable":false}
+```
+
+Response:
+
+```json
+{"v":1,"ok":true,"cmd":"drive","enabled":true,"value":"EA"}
+```
+
+`drive` is automatically disabled by `upload_rom begin`, `read`, and `upload_rom abort`.
 
 Use **`read`** (JSON cycle stream) for automated tests; reserve **`monitor`** for manual
 breadboard observation.

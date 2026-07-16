@@ -243,8 +243,9 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 |---|---|---|
 | `reset` | `{"v":1,"cmd":"reset","assert":true}` | `{"v":1,"ok":true,"asserted":true}` |
 | `upload_rom` | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; `commit` returns `reset_vector` |
-| `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | poll `read_event` for cycle/`done` |
-| `read_event` | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` |
+| `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000,"batch_size":32,"release_reset":true}` | poll `read_event` for batched `cycles`/`done` |
+| `read_event` | `{"v":1,"cmd":"read_event","batch_size":32}` | `cycles` batch / `done` / `none` |
+| `clock` | `{"v":1,"cmd":"clock","hz":1000}` | `{"v":1,"ok":true,"cmd":"clock","hz":1000}` |
 | `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":1000}` |
 | `peek` | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as hex |
 | `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
@@ -267,16 +268,15 @@ with HardwareAPI("/dev/ttyACM0") as api:
 
     api.reset(assert_reset=True)                       # hold CPU in reset
     api.upload_rom(open("bin/rom.bin", "rb").read())   # chunked, base64-encoded upload
-    api.reset(assert_reset=False)                      # release → run
 
-    capture = api.read_until_stp(max_cycles=500)       # disables monitor; ~1 kHz PHI2
+    capture = api.read_until_stp(max_cycles=500)       # arm capture and release reset
     print(capture.reason, len(capture.cycles))
 ```
 
-A captured bus cycle looks like:
+A captured batch of bus cycles looks like:
 
 ```json
-{"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
+{"v":1,"type":"event","event":"cycles","cycles":[{"seq":1,"addr":"8000","data":"18","rw":0}]}
 ```
 
 ## Testing

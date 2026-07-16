@@ -87,6 +87,14 @@ uint32_t json_get_uint(cJSON *root, const char *key, uint32_t default_val) {
     return default_val;
 }
 
+float json_get_float(cJSON *root, const char *key, float default_val) {
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (cJSON_IsNumber(item)) {
+        return (float)item->valuedouble;
+    }
+    return default_val;
+}
+
 void json_attach_id(cJSON *resp, const char *req_id) {
     if (req_id) {
         cJSON_AddStringToObject(resp, "id", req_id);

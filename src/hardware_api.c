@@ -10,7 +10,15 @@
 
 #define STP_OPCODE 0xDB
 #define DATA_MASK  (0xFFu << 15)
+#define PIN_D_FIRST 15
 #define CAPTURE_QUEUE_DEPTH 256
+#define READ_EVENT_BATCH_MAX 64
+
+/* Pins exposed in status and used by the drive diagnostic. */
+#define STATUS_PIN_RWB  23
+#define STATUS_PIN_A15  26
+#define STATUS_PIN_RESB 27
+#define STATUS_PIN_PHI2 28
 
 static hw_context_t hw;
 static uint16_t last_addr;
@@ -21,6 +29,17 @@ static bool monitor_enabled;
 static bool reset_asserted;
 static uint32_t read_max_cycles;
 static uint32_t read_cycle_count;
+static uint16_t read_batch_size;
+
+/* Drive diagnostic state. */
+static bool drive_enabled;
+static uint8_t drive_value;
+
+static void drive_release(void) {
+    drive_enabled = false;
+    drive_value = 0;
+    gpio_set_dir_in_masked(DATA_MASK);
+}
 
 typedef struct {
     uint16_t addr;
@@ -123,6 +142,7 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
     }
 
     if (strcmp(action, "abort") == 0) {
+        drive_release();
         upload_abort_restore();
         cJSON *resp = cJSON_CreateObject();
         cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
@@ -149,6 +169,7 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
         upload_next_offset = 0;
         upload_received = 0;
 
+        drive_release();
         *hw.rom_active = false;
         gpio_set_dir_in_masked(DATA_MASK);
         hw.reset_assert();
@@ -289,10 +310,34 @@ static void cmd_read(cJSON *root, const char *req_id) {
     if (read_max_cycles == 0) {
         read_max_cycles = 10000;
     }
+
+    read_batch_size = (uint16_t)json_get_uint(root, "batch_size", 1);
+    if (read_batch_size < 1) {
+        read_batch_size = 1;
+    }
+    if (read_batch_size > READ_EVENT_BATCH_MAX) {
+        read_batch_size = READ_EVENT_BATCH_MAX;
+    }
+
+    /* Drive must not force the bus during a capture. */
+    drive_release();
+
+    bool release_reset = json_get_bool(root, "release_reset", true);
+
+    if (release_reset) {
+        hw.reset_assert();
+        reset_asserted = true;
+    }
+
     read_cycle_count = 0;
     capture_queue_clear();
     read_active = true;
     monitor_enabled = false;
+
+    if (release_reset) {
+        hw.reset_release();
+        reset_asserted = false;
+    }
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
@@ -301,6 +346,8 @@ static void cmd_read(cJSON *root, const char *req_id) {
     cJSON_AddStringToObject(resp, "cmd", "read");
     cJSON_AddStringToObject(resp, "until", "stp");
     cJSON_AddNumberToObject(resp, "max_cycles", (double)read_max_cycles);
+    cJSON_AddNumberToObject(resp, "batch_size", (double)read_batch_size);
+    cJSON_AddBoolToObject(resp, "release_reset", release_reset);
     json_send_object(resp);
     cJSON_Delete(resp);
 }
@@ -309,27 +356,109 @@ static void cmd_read(cJSON *root, const char *req_id) {
  * Host-polled capture event. Uses the normal request/response framed path
  * (same as request_addr) instead of unsolicited Pico→host frames.
  */
-static void cmd_read_event(const char *req_id) {
-    capture_sample_t sample;
-    if (capture_queue_pop(&sample)) {
+static void cmd_clock(cJSON *root, const char *req_id) {
+    cJSON *hz_item = cJSON_GetObjectItemCaseSensitive(root, "hz");
+    if (!cJSON_IsNumber(hz_item)) {
+        json_send_error(req_id, "bad_request", "hz must be a number");
+        return;
+    }
+
+    float hz = (float)hz_item->valuedouble;
+    if (hz < 0.1f || hz > 1000.0f) {
+        json_send_error(req_id, "bad_request", "hz must be between 0.1 and 1000.0");
+        return;
+    }
+
+    phi2_set_hz(hz);
+    float actual_hz = *hw.current_hz;
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "clock");
+    cJSON_AddNumberToObject(resp, "hz", (double)actual_hz);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+/* Build and send a single legacy ``cycle`` event. */
+static void send_cycle_event(const capture_sample_t *sample, const char *req_id) {
+    char addr_s[8];
+    char data_s[4];
+    snprintf(addr_s, sizeof(addr_s), "%04X", sample->addr);
+    snprintf(data_s, sizeof(data_s), "%02X", sample->data);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "type", "event");
+    cJSON_AddStringToObject(resp, "event", "cycle");
+    cJSON_AddNumberToObject(resp, "seq", (double)sample->seq);
+    cJSON_AddStringToObject(resp, "addr", addr_s);
+    cJSON_AddStringToObject(resp, "data", data_s);
+    cJSON_AddNumberToObject(resp, "rw", (double)sample->rw);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+/* Build and send a batched ``cycles`` event. */
+static void send_cycles_event(const capture_sample_t *samples, uint16_t count, const char *req_id) {
+    cJSON *resp = cJSON_CreateObject();
+    cJSON *cycles = cJSON_CreateArray();
+
+    for (uint16_t i = 0; i < count; i++) {
         char addr_s[8];
         char data_s[4];
-        snprintf(addr_s, sizeof(addr_s), "%04X", sample.addr);
-        snprintf(data_s, sizeof(data_s), "%02X", sample.data);
+        snprintf(addr_s, sizeof(addr_s), "%04X", samples[i].addr);
+        snprintf(data_s, sizeof(data_s), "%02X", samples[i].data);
 
-        cJSON *resp = cJSON_CreateObject();
-        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
-        json_attach_id(resp, req_id);
-        cJSON_AddBoolToObject(resp, "ok", true);
-        cJSON_AddStringToObject(resp, "type", "event");
-        cJSON_AddStringToObject(resp, "event", "cycle");
-        cJSON_AddNumberToObject(resp, "seq", (double)sample.seq);
-        cJSON_AddStringToObject(resp, "addr", addr_s);
-        cJSON_AddStringToObject(resp, "data", data_s);
-        cJSON_AddNumberToObject(resp, "rw", (double)sample.rw);
-        json_send_object(resp);
-        cJSON_Delete(resp);
+        cJSON *cycle = cJSON_CreateObject();
+        cJSON_AddNumberToObject(cycle, "seq", (double)samples[i].seq);
+        cJSON_AddStringToObject(cycle, "addr", addr_s);
+        cJSON_AddStringToObject(cycle, "data", data_s);
+        cJSON_AddNumberToObject(cycle, "rw", (double)samples[i].rw);
+        cJSON_AddItemToArray(cycles, cycle);
+    }
+
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "type", "event");
+    cJSON_AddStringToObject(resp, "event", "cycles");
+    cJSON_AddItemToObject(resp, "cycles", cycles);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+static void cmd_read_event(cJSON *root, const char *req_id) {
+    bool batch_requested = cJSON_HasObjectItem(root, "batch_size");
+    uint16_t batch_size = (uint16_t)json_get_uint(root, "batch_size", read_batch_size);
+    if (batch_size < 1) {
+        batch_size = 1;
+    }
+    if (batch_size > READ_EVENT_BATCH_MAX) {
+        batch_size = READ_EVENT_BATCH_MAX;
+    }
+
+    capture_sample_t sample;
+    if (!batch_requested && capture_queue_pop(&sample)) {
+        /* Legacy one-cycle-per-poll behavior for hosts that don't send batch_size. */
+        send_cycle_event(&sample, req_id);
         return;
+    }
+
+    if (batch_requested) {
+        capture_sample_t batch_samples[READ_EVENT_BATCH_MAX];
+        uint16_t count = 0;
+        while (count < batch_size && capture_queue_pop(&batch_samples[count])) {
+            count++;
+        }
+        if (count > 0) {
+            send_cycles_event(batch_samples, count, req_id);
+            return;
+        }
     }
 
     if (pending_done) {
@@ -354,6 +483,7 @@ static void cmd_read_event(const char *req_id) {
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
     json_attach_id(resp, req_id);
     cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "type", "event");
     cJSON_AddStringToObject(resp, "event", "none");
     cJSON_AddBoolToObject(resp, "read_active", read_active);
     json_send_object(resp);
@@ -412,6 +542,40 @@ static void cmd_peek(cJSON *root, const char *req_id) {
     cJSON_Delete(resp);
 }
 
+static void cmd_drive(cJSON *root, const char *req_id) {
+    const char *value_str = json_get_string(root, "value");
+
+    if (value_str != NULL) {
+        unsigned int val = 0;
+        if (sscanf(value_str, "%2x", &val) != 1) {
+            json_send_error(req_id, "bad_value", "value must be a 2-digit hex string");
+            return;
+        }
+        drive_enabled = true;
+        drive_value = (uint8_t)val;
+        gpio_set_dir_out_masked(DATA_MASK);
+        gpio_put_masked(DATA_MASK, (uint32_t)drive_value << PIN_D_FIRST);
+    } else if (json_get_bool(root, "enable", true) == false) {
+        drive_release();
+    } else {
+        json_send_error(req_id, "bad_request", "drive requires value or enable:false");
+        return;
+    }
+
+    char value_hex[4];
+    snprintf(value_hex, sizeof(value_hex), "%02X", drive_value);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "drive");
+    cJSON_AddBoolToObject(resp, "enabled", drive_enabled);
+    cJSON_AddStringToObject(resp, "value", drive_enabled ? value_hex : "00");
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
 static void cmd_monitor(cJSON *root, const char *req_id) {
     monitor_enabled = json_get_bool(root, "enable", true);
 
@@ -445,6 +609,11 @@ static void cmd_status(const char *req_id) {
     cJSON_AddBoolToObject(resp, "read_active", read_active);
     cJSON_AddBoolToObject(resp, "monitor_enabled", monitor_enabled);
     cJSON_AddBoolToObject(resp, "upload_active", upload_active);
+    cJSON_AddBoolToObject(resp, "drive_enabled", drive_enabled);
+    cJSON_AddNumberToObject(resp, "resb", gpio_get(STATUS_PIN_RESB) ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "rwb", gpio_get(STATUS_PIN_RWB) ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "a15", gpio_get(STATUS_PIN_A15) ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "phi2", gpio_get(STATUS_PIN_PHI2) ? 1 : 0);
     json_send_object(resp);
     cJSON_Delete(resp);
 }
@@ -457,6 +626,9 @@ void hardware_api_init(const hw_context_t *ctx) {
     read_active = false;
     monitor_enabled = false;
     reset_asserted = false;
+    read_batch_size = 1;
+    drive_enabled = false;
+    drive_value = 0;
     capture_queue_clear();
     upload_reset_state();
 }
@@ -513,8 +685,12 @@ void hardware_api_handle_enq(void) {
         cmd_upload_rom(root, req_id);
     } else if (strcmp(cmd, "read") == 0) {
         cmd_read(root, req_id);
+    } else if (strcmp(cmd, "clock") == 0) {
+        cmd_clock(root, req_id);
     } else if (strcmp(cmd, "read_event") == 0) {
-        cmd_read_event(req_id);
+        cmd_read_event(root, req_id);
+    } else if (strcmp(cmd, "drive") == 0) {
+        cmd_drive(root, req_id);
     } else if (strcmp(cmd, "request_addr") == 0) {
         cmd_request_addr(req_id);
     } else if (strcmp(cmd, "peek") == 0) {
@@ -558,4 +734,12 @@ bool hardware_api_is_reading(void) {
 
 bool hardware_api_monitor_enabled(void) {
     return monitor_enabled;
+}
+
+bool hardware_api_drive_enabled(void) {
+    return drive_enabled;
+}
+
+uint8_t hardware_api_drive_value(void) {
+    return drive_value;
 }

@@ -20,7 +20,9 @@ and bundles a small JSON parser (cJSON) for the v1 Hardware API.
 5. **Built-in demo program:** matches Romulan `demo.txt` — writes `$05` then `$14` then
    `$08` to RAM-side stores and ends in **`STP` (`$DB`)** so capture stops cleanly.
 6. **Hardware API:** structured host control over USB-CDC serial (see
-   [Hardware API](hardware-api.md)).
+   [Hardware API](hardware-api.md)). The `read` command returns batched `cycles` events
+   (up to `batch_size` cycles per `read_event` poll); `drive` can force the data bus for
+   diagnostics.
 
 ## Build
 

@@ -37,4 +37,8 @@ uint16_t hardware_api_last_addr(void);
 bool hardware_api_is_reading(void);
 bool hardware_api_monitor_enabled(void);
 
+/* Drive diagnostic state. When enabled, rom_task forces D0-D7 with drive_value. */
+bool hardware_api_drive_enabled(void);
+uint8_t hardware_api_drive_value(void);
+
 #endif
