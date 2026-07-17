@@ -27,6 +27,10 @@ static uint8_t last_rw_report; /* 0=read, 1=write (protocol) */
 static bool read_active;
 static bool monitor_enabled;
 static bool reset_asserted;
+/* Set while a framed command exchange is in progress (ENQ seen until the
+ * response has been sent). Checked by main.c to keep JSON monitor output
+ * from interleaving into response frames. */
+static bool exchange_active;
 static uint32_t read_max_cycles;
 static uint32_t read_cycle_count;
 static uint16_t read_batch_size;
@@ -626,6 +630,7 @@ void hardware_api_init(const hw_context_t *ctx) {
     read_active = false;
     monitor_enabled = false;
     reset_asserted = false;
+    exchange_active = false;
     read_batch_size = 1;
     drive_enabled = false;
     drive_value = 0;
@@ -633,7 +638,7 @@ void hardware_api_init(const hw_context_t *ctx) {
     upload_reset_state();
 }
 
-void hardware_api_handle_enq(void) {
+static void handle_enq_inner(void) {
     /* Static: PROTO_JSON_MAX is large enough for a full-ROM base64 chunk. */
     static uint8_t buf[PROTO_JSON_MAX];
     size_t len = 0;
@@ -704,6 +709,16 @@ void hardware_api_handle_enq(void) {
     }
 
     cJSON_Delete(root);
+}
+
+void hardware_api_handle_enq(void) {
+    exchange_active = true;
+    handle_enq_inner();
+    exchange_active = false;
+}
+
+bool hardware_api_exchange_active(void) {
+    return exchange_active;
 }
 
 void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {

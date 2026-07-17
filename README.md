@@ -49,7 +49,7 @@ The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus 
 - Single 3.3 V logic level: no MOSFETs, level shifters, or oscillator chip.
 - Framed USB-serial **Hardware API** (JSON) for scripted bring-up and CI.
 - Structured JSON bus-cycle capture (`read` until `STP`) for automated tests.
-- Optional ASCII bus monitor for manual breadboard observation.
+- Optional JSON bus monitor (NDJSON lines) for breadboard observation.
 - Host-side ROM builder with 6502-address helpers and a `STP` terminator.
 
 ## Architecture
@@ -248,7 +248,7 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 | `clock` | `{"v":1,"cmd":"clock","hz":1000}` | `{"v":1,"ok":true,"cmd":"clock","hz":1000}` |
 | `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":1000}` |
 | `peek` | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as hex |
-| `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
+| `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles JSON bus monitor (off by default) |
 | `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample) |
 
 > [!IMPORTANT]

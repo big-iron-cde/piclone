@@ -31,8 +31,9 @@ Sender                         Receiver
 ```{important}
 Do not open a plain serial monitor on the port while using the Hardware API; unstructured
 output corrupts framing. Only one process may hold the port at a time. The **`monitor`**
-command also prints unstructured ASCII, and that state **persists on the Pico** until you
-disable it or start a **`read`** capture (which auto-disables it).
+command also prints unframed lines (NDJSON in the v1 output schema), and that state
+**persists on the Pico** until you disable it or start a **`read`** capture
+(which auto-disables it).
 ```
 
 ## Commands
@@ -49,7 +50,7 @@ All commands are JSON sent in a framed payload (host → Pico), and every reques
 | **clock** | `{"v":1,"cmd":"clock","hz":1000}` | `{"v":1,"ok":true,"cmd":"clock","hz":1000}` |
 | **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":1000}` |
 | **peek** | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as a hex string |
-| **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the ASCII bus table (off by default) |
+| **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the JSON bus monitor (off by default) |
 | **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample, raw pins) |
 | **drive** | `{"v":1,"cmd":"drive","value":"EA"}` or `{"v":1,"cmd":"drive","enable":false}` | force D0–D7 to a byte, or release the bus |
 
@@ -91,7 +92,7 @@ Final event:
 ```
 
 To use this in automated tests, end your ROM with a **`STP` (`0xDB`)** instruction (not
-`BRK`, that opcode is `0x00`). Starting a `read` automatically disables the ASCII monitor
+`BRK`, that opcode is `0x00`). Starting a `read` automatically disables the JSON monitor
 on the Pico and releases any active `drive` diagnostic.
 
 By default `read` also **releases RESET** immediately after arming capture (`release_reset`
@@ -132,7 +133,7 @@ Response:
 ### status
 
 Returns a full hardware snapshot: clock frequency, reset state, ROM active flag,
-whether the ASCII monitor is enabled, the last bus sample (`last_addr`, `last_data`,
+whether the JSON monitor is enabled, the last bus sample (`last_addr`, `last_data`,
 `last_rw`), the active `drive` diagnostic state, and the raw pin levels (`resb`, `rwb`,
 `a15`, `phi2`) in a single JSON response.
 
@@ -149,18 +150,22 @@ whether the ASCII monitor is enabled, the last bus sample (`last_addr`, `last_da
 
 ### monitor
 
-Toggles the human-readable ASCII bus table (disabled by default). **Mutually exclusive
-with scripted capture:** table rows contain `|` (`0x7C`) and other bytes that collide with
-framed protocol traffic. Disable it before upload/read:
+Toggles the JSON bus monitor (disabled by default). When enabled, every CPU bus cycle
+is printed as an unframed NDJSON line in the v1 output schema — the same envelope the
+romulan CLI emits:
+
+```json
+{"v":1,"type":"event","event":"monitor","data":{"seq":1,"addr":"8000","data":"EA","rw":0,"hz":1000.0}}
+```
+
+Monitor lines are **not framed** and are **suppressed while a framed command exchange
+is in progress** (between the host's ENQ and the end of the Pico's response); lines
+resume once the exchange completes. Still, they share the wire with the framed
+protocol, so disable the monitor before scripted upload/read (romulan's
+`upload_rom()` and `read_until_stp()` do this automatically):
 
 ```python
 api.monitor(enable=False)
-```
-
-Example output:
-
-```
-| 01 |  18  |  8000   |  0 | 1000.0 |
 ```
 
 ### clock

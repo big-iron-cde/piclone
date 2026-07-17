@@ -166,16 +166,20 @@ static void rom_image_init(void) {
 
 // ─── ROM emulation (polling) ───────────────────────────────────────────
 
-/* Emit one captured cycle to the Hardware API and optional ASCII monitor. */
+/* Emit one captured cycle to the Hardware API and optional JSON monitor. */
 static void emit_bus_cycle(uint16_t addr, uint8_t data, bool a15_read) {
     /* Infer RWB from A15: ROM (A15=1) = read, RAM (A15=0) = write.
      * GP23 is not a usable header pin for CPU RWB on Pico 2. */
     hardware_api_on_bus_cycle(addr, data, a15_read);
 
-    if (hardware_api_monitor_enabled() && !hardware_api_is_reading()) {
-        /* Match protocol: read → 0, write → 1 */
-        printf("| %02d |  %02X  |  %04X   |  %d | %5.1f |\n",
-               seq_counter, data, addr, a15_read ? 0 : 1, current_hz);
+    if (hardware_api_monitor_enabled() && !hardware_api_is_reading()
+        && !hardware_api_exchange_active()) {
+        /* Unframed NDJSON monitor event (v1 output schema, same envelope as
+         * the romulan CLI). rw matches the protocol: read → 0, write → 1.
+         * snprintf is used instead of cJSON to avoid a malloc per cycle. */
+        printf("{\"v\":1,\"type\":\"event\",\"event\":\"monitor\",\"data\":"
+               "{\"seq\":%u,\"addr\":\"%04X\",\"data\":\"%02X\",\"rw\":%u,\"hz\":%.1f}}\n",
+               (unsigned)seq_counter, addr, data, a15_read ? 0u : 1u, (double)current_hz);
         seq_counter++;
         if (seq_counter > 99) {
             seq_counter = 1;
@@ -217,12 +221,8 @@ static void rom_task(void) {
 
         bool reset_state = gpio_get(PIN_RESET);
         if (reset_state && !reset_last_state) {
+            /* JSON monitor lines need no table header; just restart numbering. */
             seq_counter = 1;
-            if (hardware_api_monitor_enabled()) {
-                printf("\n+----+------+---------+----+-------+\n");
-                printf("| NO | DATA | ADDRESS | RW | CLOCK |\n");
-                printf("+----+------+---------+----+-------+\n");
-            }
         }
         reset_last_state = reset_state;
 
