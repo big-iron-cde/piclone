@@ -19,6 +19,10 @@ static void proto_idle(void) {
     }
 }
 
+void proto_idle_pump(void) {
+    proto_idle();
+}
+
 bool proto_read_byte(uint8_t *out, uint32_t timeout_ms) {
     absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
     while (true) {

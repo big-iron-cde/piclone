@@ -6,6 +6,7 @@
 #include "hardware/gpio.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define STP_OPCODE 0xDB
@@ -510,8 +511,138 @@ static void cmd_request_addr(const char *req_id) {
 }
 
 #define PEEK_MAX_COUNT 64
+#define LIVE_PEEK_TIMEOUT_MS 1000
+#define LIVE_PEEK_MAX_CYCLES 64
+#define LIVE_PEEK_HZ 1000.0f
+
+/* Parse a hex-string field (e.g. "800C" or "0x800C") into a uint16_t. */
+static bool json_get_hex16(cJSON *root, const char *key, uint16_t *out) {
+    const char *s = json_get_string(root, key);
+    if (!s) {
+        return false;
+    }
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 16);
+    if (end == s || *end != '\0' || v > 0xFFFFul) {
+        return false;
+    }
+    *out = (uint16_t)v;
+    return true;
+}
+
+/* Live peek: patch ``LDA $addr`` / ``STP`` at ``$8000`` (and point the reset
+ * vector there), run the CPU, and sample the bus cycle that reads ``addr``.
+ * ROM bytes, clock speed, and capture state are all restored afterwards;
+ * the CPU is left held in reset. Returns true with the sampled byte. */
+static bool live_peek_run(uint16_t addr, uint8_t *out_data) {
+    uint8_t saved[6];
+    memcpy(saved, hw.rom_image, 4);
+    saved[4] = hw.rom_image[0x7FFC];
+    saved[5] = hw.rom_image[0x7FFD];
+
+    hw.rom_image[0] = 0xAD;                    /* LDA absolute */
+    hw.rom_image[1] = (uint8_t)(addr & 0xFFu);
+    hw.rom_image[2] = (uint8_t)(addr >> 8);
+    hw.rom_image[3] = STP_OPCODE;
+    hw.rom_image[0x7FFC] = 0x00;               /* force reset vector to $8000 */
+    hw.rom_image[0x7FFD] = 0x80;
+
+    drive_release();
+    hw.reset_assert();
+    reset_asserted = true;
+
+    read_cycle_count = 0;
+    read_max_cycles = LIVE_PEEK_MAX_CYCLES;
+    capture_queue_clear();
+    read_active = true;
+
+    /* Run the stub fast regardless of the configured clock, then restore. */
+    float saved_hz = *hw.current_hz;
+    phi2_set_hz(LIVE_PEEK_HZ);
+    hw.reset_release();
+    reset_asserted = false;
+
+    /* The stub terminates itself with STP (or the cycle cap backstops it).
+     * Pump ROM emulation directly; the main loop is blocked on us. */
+    absolute_time_t deadline = make_timeout_time_ms(LIVE_PEEK_TIMEOUT_MS);
+    while (!pending_done && !time_reached(deadline)) {
+        proto_idle_pump();
+        tight_loop_contents();
+    }
+
+    hw.reset_assert();
+    reset_asserted = true;
+    read_active = false;
+    phi2_set_hz(saved_hz);
+
+    memcpy(hw.rom_image, saved, 4);
+    hw.rom_image[0x7FFC] = saved[4];
+    hw.rom_image[0x7FFD] = saved[5];
+
+    bool found = false;
+    capture_sample_t s;
+    while (capture_queue_pop(&s)) {
+        if (!found && s.addr == addr && s.rw == 0u) {
+            *out_data = s.data;
+            found = true;
+        }
+    }
+    capture_queue_clear();
+    return found;
+}
+
+static void cmd_live_peek(uint16_t addr, const char *req_id) {
+    if (read_active || upload_active) {
+        json_send_error(req_id, "busy", "capture or upload in progress");
+        return;
+    }
+
+    uint8_t data = 0;
+    if (!live_peek_run(addr, &data)) {
+        json_send_error(req_id, "no_cycle", "no bus cycle matched addr");
+        return;
+    }
+
+    char addr_s[8];
+    char data_s[4];
+    snprintf(addr_s, sizeof(addr_s), "%04X", addr);
+    snprintf(data_s, sizeof(data_s), "%02X", data);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "peek");
+    cJSON_AddStringToObject(resp, "addr", addr_s);
+    cJSON_AddStringToObject(resp, "data", data_s);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
 
 static void cmd_peek(cJSON *root, const char *req_id) {
+    /* Mode is selected by which fields are present: "addr" (hex string)
+     * selects a live bus/RAM peek; "offset" selects ROM-image readback. */
+    bool has_addr = cJSON_HasObjectItem(root, "addr");
+    bool has_offset = cJSON_HasObjectItem(root, "offset");
+
+    if (has_addr && has_offset) {
+        json_send_error(req_id, "bad_request", "peek takes addr or offset, not both");
+        return;
+    }
+    if (has_addr) {
+        uint16_t addr;
+        if (!json_get_hex16(root, "addr", &addr)) {
+            json_send_error(req_id, "bad_request", "addr must be a hex string 0000-FFFF");
+            return;
+        }
+        cmd_live_peek(addr, req_id);
+        return;
+    }
+    if (!has_offset) {
+        json_send_error(req_id, "bad_request", "peek requires addr or offset");
+        return;
+    }
+
     uint32_t offset = json_get_uint(root, "offset", 0);
     uint32_t count = json_get_uint(root, "count", 1);
 
