@@ -247,7 +247,7 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 | `read_event` | `{"v":1,"cmd":"read_event","batch_size":32}` | `cycles` batch / `done` / `none` |
 | `clock` | `{"v":1,"cmd":"clock","hz":1000}` | `{"v":1,"ok":true,"cmd":"clock","hz":1000}` |
 | `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":1000}` |
-| `peek` | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as hex |
+| `peek` | `{"v":1,"cmd":"peek","offset":28672,"count":16}` or `{"v":1,"cmd":"peek","addr":"4000"}` | bytes from `rom_image[offset]` as hex, or one live bus/RAM byte (LDA-stub) |
 | `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles JSON bus monitor (off by default) |
 | `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample) |
 
