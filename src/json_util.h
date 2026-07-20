@@ -22,6 +22,7 @@ bool json_send_error(const char *req_id, const char *error, const char *detail);
 const char *json_get_string(cJSON *root, const char *key);
 bool json_get_bool(cJSON *root, const char *key, bool default_val);
 uint32_t json_get_uint(cJSON *root, const char *key, uint32_t default_val);
+float json_get_float(cJSON *root, const char *key, float default_val);
 
 const char *json_id_from_root(cJSON *root);
 

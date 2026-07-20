@@ -6,11 +6,20 @@
 #include "hardware/gpio.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define STP_OPCODE 0xDB
 #define DATA_MASK  (0xFFu << 15)
+#define PIN_D_FIRST 15
 #define CAPTURE_QUEUE_DEPTH 256
+#define READ_EVENT_BATCH_MAX 64
+
+/* Pins exposed in status and used by the drive diagnostic. */
+#define STATUS_PIN_RWB  23
+#define STATUS_PIN_A15  26
+#define STATUS_PIN_RESB 27
+#define STATUS_PIN_PHI2 28
 
 static hw_context_t hw;
 static uint16_t last_addr;
@@ -19,8 +28,23 @@ static uint8_t last_rw_report; /* 0=read, 1=write (protocol) */
 static bool read_active;
 static bool monitor_enabled;
 static bool reset_asserted;
+/* Set while a framed command exchange is in progress (ENQ seen until the
+ * response has been sent). Checked by main.c to keep JSON monitor output
+ * from interleaving into response frames. */
+static bool exchange_active;
 static uint32_t read_max_cycles;
 static uint32_t read_cycle_count;
+static uint16_t read_batch_size;
+
+/* Drive diagnostic state. */
+static bool drive_enabled;
+static uint8_t drive_value;
+
+static void drive_release(void) {
+    drive_enabled = false;
+    drive_value = 0;
+    gpio_set_dir_in_masked(DATA_MASK);
+}
 
 typedef struct {
     uint16_t addr;
@@ -123,6 +147,7 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
     }
 
     if (strcmp(action, "abort") == 0) {
+        drive_release();
         upload_abort_restore();
         cJSON *resp = cJSON_CreateObject();
         cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
@@ -149,6 +174,7 @@ static void cmd_upload_rom(cJSON *root, const char *req_id) {
         upload_next_offset = 0;
         upload_received = 0;
 
+        drive_release();
         *hw.rom_active = false;
         gpio_set_dir_in_masked(DATA_MASK);
         hw.reset_assert();
@@ -289,10 +315,34 @@ static void cmd_read(cJSON *root, const char *req_id) {
     if (read_max_cycles == 0) {
         read_max_cycles = 10000;
     }
+
+    read_batch_size = (uint16_t)json_get_uint(root, "batch_size", 1);
+    if (read_batch_size < 1) {
+        read_batch_size = 1;
+    }
+    if (read_batch_size > READ_EVENT_BATCH_MAX) {
+        read_batch_size = READ_EVENT_BATCH_MAX;
+    }
+
+    /* Drive must not force the bus during a capture. */
+    drive_release();
+
+    bool release_reset = json_get_bool(root, "release_reset", true);
+
+    if (release_reset) {
+        hw.reset_assert();
+        reset_asserted = true;
+    }
+
     read_cycle_count = 0;
     capture_queue_clear();
     read_active = true;
     monitor_enabled = false;
+
+    if (release_reset) {
+        hw.reset_release();
+        reset_asserted = false;
+    }
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
@@ -301,6 +351,8 @@ static void cmd_read(cJSON *root, const char *req_id) {
     cJSON_AddStringToObject(resp, "cmd", "read");
     cJSON_AddStringToObject(resp, "until", "stp");
     cJSON_AddNumberToObject(resp, "max_cycles", (double)read_max_cycles);
+    cJSON_AddNumberToObject(resp, "batch_size", (double)read_batch_size);
+    cJSON_AddBoolToObject(resp, "release_reset", release_reset);
     json_send_object(resp);
     cJSON_Delete(resp);
 }
@@ -309,27 +361,109 @@ static void cmd_read(cJSON *root, const char *req_id) {
  * Host-polled capture event. Uses the normal request/response framed path
  * (same as request_addr) instead of unsolicited Pico→host frames.
  */
-static void cmd_read_event(const char *req_id) {
-    capture_sample_t sample;
-    if (capture_queue_pop(&sample)) {
+static void cmd_clock(cJSON *root, const char *req_id) {
+    cJSON *hz_item = cJSON_GetObjectItemCaseSensitive(root, "hz");
+    if (!cJSON_IsNumber(hz_item)) {
+        json_send_error(req_id, "bad_request", "hz must be a number");
+        return;
+    }
+
+    float hz = (float)hz_item->valuedouble;
+    if (hz < 0.1f || hz > 1000.0f) {
+        json_send_error(req_id, "bad_request", "hz must be between 0.1 and 1000.0");
+        return;
+    }
+
+    phi2_set_hz(hz);
+    float actual_hz = *hw.current_hz;
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "clock");
+    cJSON_AddNumberToObject(resp, "hz", (double)actual_hz);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+/* Build and send a single legacy ``cycle`` event. */
+static void send_cycle_event(const capture_sample_t *sample, const char *req_id) {
+    char addr_s[8];
+    char data_s[4];
+    snprintf(addr_s, sizeof(addr_s), "%04X", sample->addr);
+    snprintf(data_s, sizeof(data_s), "%02X", sample->data);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "type", "event");
+    cJSON_AddStringToObject(resp, "event", "cycle");
+    cJSON_AddNumberToObject(resp, "seq", (double)sample->seq);
+    cJSON_AddStringToObject(resp, "addr", addr_s);
+    cJSON_AddStringToObject(resp, "data", data_s);
+    cJSON_AddNumberToObject(resp, "rw", (double)sample->rw);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+/* Build and send a batched ``cycles`` event. */
+static void send_cycles_event(const capture_sample_t *samples, uint16_t count, const char *req_id) {
+    cJSON *resp = cJSON_CreateObject();
+    cJSON *cycles = cJSON_CreateArray();
+
+    for (uint16_t i = 0; i < count; i++) {
         char addr_s[8];
         char data_s[4];
-        snprintf(addr_s, sizeof(addr_s), "%04X", sample.addr);
-        snprintf(data_s, sizeof(data_s), "%02X", sample.data);
+        snprintf(addr_s, sizeof(addr_s), "%04X", samples[i].addr);
+        snprintf(data_s, sizeof(data_s), "%02X", samples[i].data);
 
-        cJSON *resp = cJSON_CreateObject();
-        cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
-        json_attach_id(resp, req_id);
-        cJSON_AddBoolToObject(resp, "ok", true);
-        cJSON_AddStringToObject(resp, "type", "event");
-        cJSON_AddStringToObject(resp, "event", "cycle");
-        cJSON_AddNumberToObject(resp, "seq", (double)sample.seq);
-        cJSON_AddStringToObject(resp, "addr", addr_s);
-        cJSON_AddStringToObject(resp, "data", data_s);
-        cJSON_AddNumberToObject(resp, "rw", (double)sample.rw);
-        json_send_object(resp);
-        cJSON_Delete(resp);
+        cJSON *cycle = cJSON_CreateObject();
+        cJSON_AddNumberToObject(cycle, "seq", (double)samples[i].seq);
+        cJSON_AddStringToObject(cycle, "addr", addr_s);
+        cJSON_AddStringToObject(cycle, "data", data_s);
+        cJSON_AddNumberToObject(cycle, "rw", (double)samples[i].rw);
+        cJSON_AddItemToArray(cycles, cycle);
+    }
+
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "type", "event");
+    cJSON_AddStringToObject(resp, "event", "cycles");
+    cJSON_AddItemToObject(resp, "cycles", cycles);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+static void cmd_read_event(cJSON *root, const char *req_id) {
+    bool batch_requested = cJSON_HasObjectItem(root, "batch_size");
+    uint16_t batch_size = (uint16_t)json_get_uint(root, "batch_size", read_batch_size);
+    if (batch_size < 1) {
+        batch_size = 1;
+    }
+    if (batch_size > READ_EVENT_BATCH_MAX) {
+        batch_size = READ_EVENT_BATCH_MAX;
+    }
+
+    capture_sample_t sample;
+    if (!batch_requested && capture_queue_pop(&sample)) {
+        /* Legacy one-cycle-per-poll behavior for hosts that don't send batch_size. */
+        send_cycle_event(&sample, req_id);
         return;
+    }
+
+    if (batch_requested) {
+        capture_sample_t batch_samples[READ_EVENT_BATCH_MAX];
+        uint16_t count = 0;
+        while (count < batch_size && capture_queue_pop(&batch_samples[count])) {
+            count++;
+        }
+        if (count > 0) {
+            send_cycles_event(batch_samples, count, req_id);
+            return;
+        }
     }
 
     if (pending_done) {
@@ -354,6 +488,7 @@ static void cmd_read_event(const char *req_id) {
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
     json_attach_id(resp, req_id);
     cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "type", "event");
     cJSON_AddStringToObject(resp, "event", "none");
     cJSON_AddBoolToObject(resp, "read_active", read_active);
     json_send_object(resp);
@@ -375,6 +510,207 @@ static void cmd_request_addr(const char *req_id) {
     cJSON_Delete(resp);
 }
 
+#define PEEK_MAX_COUNT 64
+#define LIVE_PEEK_TIMEOUT_MS 1000
+#define LIVE_PEEK_MAX_CYCLES 64
+#define LIVE_PEEK_HZ 1000.0f
+
+/* Parse a hex-string field (e.g. "800C" or "0x800C") into a uint16_t. */
+static bool json_get_hex16(cJSON *root, const char *key, uint16_t *out) {
+    const char *s = json_get_string(root, key);
+    if (!s) {
+        return false;
+    }
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 16);
+    if (end == s || *end != '\0' || v > 0xFFFFul) {
+        return false;
+    }
+    *out = (uint16_t)v;
+    return true;
+}
+
+/* Live peek: patch ``LDA $addr`` / ``STP`` at ``$8000`` (and point the reset
+ * vector there), run the CPU, and sample the bus cycle that reads ``addr``.
+ * ROM bytes, clock speed, and capture state are all restored afterwards;
+ * the CPU is left held in reset. Returns true with the sampled byte. */
+static bool live_peek_run(uint16_t addr, uint8_t *out_data) {
+    uint8_t saved[6];
+    memcpy(saved, hw.rom_image, 4);
+    saved[4] = hw.rom_image[0x7FFC];
+    saved[5] = hw.rom_image[0x7FFD];
+
+    hw.rom_image[0] = 0xAD;                    /* LDA absolute */
+    hw.rom_image[1] = (uint8_t)(addr & 0xFFu);
+    hw.rom_image[2] = (uint8_t)(addr >> 8);
+    hw.rom_image[3] = STP_OPCODE;
+    hw.rom_image[0x7FFC] = 0x00;               /* force reset vector to $8000 */
+    hw.rom_image[0x7FFD] = 0x80;
+
+    drive_release();
+    hw.reset_assert();
+    reset_asserted = true;
+
+    read_cycle_count = 0;
+    read_max_cycles = LIVE_PEEK_MAX_CYCLES;
+    capture_queue_clear();
+    read_active = true;
+
+    /* Run the stub fast regardless of the configured clock, then restore. */
+    float saved_hz = *hw.current_hz;
+    phi2_set_hz(LIVE_PEEK_HZ);
+    hw.reset_release();
+    reset_asserted = false;
+
+    /* The stub terminates itself with STP (or the cycle cap backstops it).
+     * Pump ROM emulation directly; the main loop is blocked on us. */
+    absolute_time_t deadline = make_timeout_time_ms(LIVE_PEEK_TIMEOUT_MS);
+    while (!pending_done && !time_reached(deadline)) {
+        proto_idle_pump();
+        tight_loop_contents();
+    }
+
+    hw.reset_assert();
+    reset_asserted = true;
+    read_active = false;
+    phi2_set_hz(saved_hz);
+
+    memcpy(hw.rom_image, saved, 4);
+    hw.rom_image[0x7FFC] = saved[4];
+    hw.rom_image[0x7FFD] = saved[5];
+
+    bool found = false;
+    capture_sample_t s;
+    while (capture_queue_pop(&s)) {
+        if (!found && s.addr == addr && s.rw == 0u) {
+            *out_data = s.data;
+            found = true;
+        }
+    }
+    capture_queue_clear();
+    return found;
+}
+
+static void cmd_live_peek(uint16_t addr, const char *req_id) {
+    if (read_active || upload_active) {
+        json_send_error(req_id, "busy", "capture or upload in progress");
+        return;
+    }
+
+    uint8_t data = 0;
+    if (!live_peek_run(addr, &data)) {
+        json_send_error(req_id, "no_cycle", "no bus cycle matched addr");
+        return;
+    }
+
+    char addr_s[8];
+    char data_s[4];
+    snprintf(addr_s, sizeof(addr_s), "%04X", addr);
+    snprintf(data_s, sizeof(data_s), "%02X", data);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "peek");
+    cJSON_AddStringToObject(resp, "addr", addr_s);
+    cJSON_AddStringToObject(resp, "data", data_s);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+static void cmd_peek(cJSON *root, const char *req_id) {
+    /* Mode is selected by which fields are present: "addr" (hex string)
+     * selects a live bus/RAM peek; "offset" selects ROM-image readback. */
+    bool has_addr = cJSON_HasObjectItem(root, "addr");
+    bool has_offset = cJSON_HasObjectItem(root, "offset");
+
+    if (has_addr && has_offset) {
+        json_send_error(req_id, "bad_request", "peek takes addr or offset, not both");
+        return;
+    }
+    if (has_addr) {
+        uint16_t addr;
+        if (!json_get_hex16(root, "addr", &addr)) {
+            json_send_error(req_id, "bad_request", "addr must be a hex string 0000-FFFF");
+            return;
+        }
+        cmd_live_peek(addr, req_id);
+        return;
+    }
+    if (!has_offset) {
+        json_send_error(req_id, "bad_request", "peek requires addr or offset");
+        return;
+    }
+
+    uint32_t offset = json_get_uint(root, "offset", 0);
+    uint32_t count = json_get_uint(root, "count", 1);
+
+    if (offset >= hw.rom_size) {
+        json_send_error(req_id, "bad_offset", "offset out of range");
+        return;
+    }
+    if (count == 0) {
+        count = 1;
+    }
+    if (count > PEEK_MAX_COUNT) {
+        count = PEEK_MAX_COUNT;
+    }
+    if (offset + count > hw.rom_size) {
+        count = (uint32_t)(hw.rom_size - offset);
+    }
+
+    char hex[(PEEK_MAX_COUNT * 2) + 1];
+    for (uint32_t i = 0; i < count; i++) {
+        snprintf(hex + (i * 2), 3, "%02X", hw.rom_image[offset + i]);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "peek");
+    cJSON_AddNumberToObject(resp, "offset", (double)offset);
+    cJSON_AddNumberToObject(resp, "count", (double)count);
+    cJSON_AddStringToObject(resp, "data", hex);
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
+static void cmd_drive(cJSON *root, const char *req_id) {
+    const char *value_str = json_get_string(root, "value");
+
+    if (value_str != NULL) {
+        unsigned int val = 0;
+        if (sscanf(value_str, "%2x", &val) != 1) {
+            json_send_error(req_id, "bad_value", "value must be a 2-digit hex string");
+            return;
+        }
+        drive_enabled = true;
+        drive_value = (uint8_t)val;
+        gpio_set_dir_out_masked(DATA_MASK);
+        gpio_put_masked(DATA_MASK, (uint32_t)drive_value << PIN_D_FIRST);
+    } else if (json_get_bool(root, "enable", true) == false) {
+        drive_release();
+    } else {
+        json_send_error(req_id, "bad_request", "drive requires value or enable:false");
+        return;
+    }
+
+    char value_hex[4];
+    snprintf(value_hex, sizeof(value_hex), "%02X", drive_value);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
+    json_attach_id(resp, req_id);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON_AddStringToObject(resp, "cmd", "drive");
+    cJSON_AddBoolToObject(resp, "enabled", drive_enabled);
+    cJSON_AddStringToObject(resp, "value", drive_enabled ? value_hex : "00");
+    json_send_object(resp);
+    cJSON_Delete(resp);
+}
+
 static void cmd_monitor(cJSON *root, const char *req_id) {
     monitor_enabled = json_get_bool(root, "enable", true);
 
@@ -390,7 +726,9 @@ static void cmd_monitor(cJSON *root, const char *req_id) {
 
 static void cmd_status(const char *req_id) {
     char addr[8];
+    char data[4];
     snprintf(addr, sizeof(addr), "%04X", last_addr);
+    snprintf(data, sizeof(data), "%02X", last_data);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
@@ -401,9 +739,16 @@ static void cmd_status(const char *req_id) {
     cJSON_AddBoolToObject(resp, "rom_active", *hw.rom_active);
     cJSON_AddBoolToObject(resp, "reset_asserted", reset_asserted);
     cJSON_AddStringToObject(resp, "last_addr", addr);
+    cJSON_AddStringToObject(resp, "last_data", data);
+    cJSON_AddNumberToObject(resp, "last_rw", (double)last_rw_report);
     cJSON_AddBoolToObject(resp, "read_active", read_active);
     cJSON_AddBoolToObject(resp, "monitor_enabled", monitor_enabled);
     cJSON_AddBoolToObject(resp, "upload_active", upload_active);
+    cJSON_AddBoolToObject(resp, "drive_enabled", drive_enabled);
+    cJSON_AddNumberToObject(resp, "resb", gpio_get(STATUS_PIN_RESB) ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "rwb", gpio_get(STATUS_PIN_RWB) ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "a15", gpio_get(STATUS_PIN_A15) ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "phi2", gpio_get(STATUS_PIN_PHI2) ? 1 : 0);
     json_send_object(resp);
     cJSON_Delete(resp);
 }
@@ -416,11 +761,15 @@ void hardware_api_init(const hw_context_t *ctx) {
     read_active = false;
     monitor_enabled = false;
     reset_asserted = false;
+    exchange_active = false;
+    read_batch_size = 1;
+    drive_enabled = false;
+    drive_value = 0;
     capture_queue_clear();
     upload_reset_state();
 }
 
-void hardware_api_handle_enq(void) {
+static void handle_enq_inner(void) {
     /* Static: PROTO_JSON_MAX is large enough for a full-ROM base64 chunk. */
     static uint8_t buf[PROTO_JSON_MAX];
     size_t len = 0;
@@ -453,13 +802,14 @@ void hardware_api_handle_enq(void) {
     }
 
     /* Keep an armed capture alive across read_event polls, reset, and
-     * non-destructive queries (status / request_addr). */
+     * non-destructive queries (status / request_addr / peek). */
     if (
         strcmp(cmd, "read") != 0
         && strcmp(cmd, "read_event") != 0
         && strcmp(cmd, "reset") != 0
         && strcmp(cmd, "status") != 0
         && strcmp(cmd, "request_addr") != 0
+        && strcmp(cmd, "peek") != 0
     ) {
         read_active = false;
         capture_queue_clear();
@@ -471,10 +821,16 @@ void hardware_api_handle_enq(void) {
         cmd_upload_rom(root, req_id);
     } else if (strcmp(cmd, "read") == 0) {
         cmd_read(root, req_id);
+    } else if (strcmp(cmd, "clock") == 0) {
+        cmd_clock(root, req_id);
     } else if (strcmp(cmd, "read_event") == 0) {
-        cmd_read_event(req_id);
+        cmd_read_event(root, req_id);
+    } else if (strcmp(cmd, "drive") == 0) {
+        cmd_drive(root, req_id);
     } else if (strcmp(cmd, "request_addr") == 0) {
         cmd_request_addr(req_id);
+    } else if (strcmp(cmd, "peek") == 0) {
+        cmd_peek(root, req_id);
     } else if (strcmp(cmd, "monitor") == 0) {
         cmd_monitor(root, req_id);
     } else if (strcmp(cmd, "status") == 0) {
@@ -484,6 +840,16 @@ void hardware_api_handle_enq(void) {
     }
 
     cJSON_Delete(root);
+}
+
+void hardware_api_handle_enq(void) {
+    exchange_active = true;
+    handle_enq_inner();
+    exchange_active = false;
+}
+
+bool hardware_api_exchange_active(void) {
+    return exchange_active;
 }
 
 void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {
@@ -515,4 +881,12 @@ bool hardware_api_is_reading(void) {
 
 bool hardware_api_monitor_enabled(void) {
     return monitor_enabled;
+}
+
+bool hardware_api_drive_enabled(void) {
+    return drive_enabled;
+}
+
+uint8_t hardware_api_drive_value(void) {
+    return drive_value;
 }

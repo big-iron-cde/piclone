@@ -29,6 +29,10 @@
 typedef void (*proto_idle_fn)(void);
 void proto_set_idle_hook(proto_idle_fn fn);
 
+/* Invoke the idle hook once directly. Used by blocking command handlers
+ * (e.g. live peek) that must keep ROM emulation running while they wait. */
+void proto_idle_pump(void);
+
 bool proto_read_byte(uint8_t *out, uint32_t timeout_ms);
 bool proto_write_byte(uint8_t b);
 

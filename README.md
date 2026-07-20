@@ -49,7 +49,7 @@ The Pico holds a 32 KB ROM image in SRAM and serves it to the CPU's address bus 
 - Single 3.3 V logic level: no MOSFETs, level shifters, or oscillator chip.
 - Framed USB-serial **Hardware API** (JSON) for scripted bring-up and CI.
 - Structured JSON bus-cycle capture (`read` until `STP`) for automated tests.
-- Optional ASCII bus monitor for manual breadboard observation.
+- Optional JSON bus monitor (NDJSON lines) for breadboard observation.
 - Host-side ROM builder with 6502-address helpers and a `STP` terminator.
 
 ## Architecture
@@ -82,7 +82,9 @@ $8000 ─┼─────────────────┤
 $FFFF ─┴─────────────────┘
 ```
 
-When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the Pico serves `rom_image[addr & 0x7FFF]`. The same wire deselects the RAM, so no inverter or decoder is needed.
+When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the Pico serves
+`rom_image[addr & 0x7FFF]` on read cycles (RWB high) and stays Hi-Z on write cycles so the
+CPU owns the data bus. The same wire deselects the RAM, so no inverter or decoder is needed.
 
 ## Hardware
 
@@ -241,11 +243,13 @@ The host talks to the Pico over USB-CDC at **115200 baud** using a framed protoc
 |---|---|---|
 | `reset` | `{"v":1,"cmd":"reset","assert":true}` | `{"v":1,"ok":true,"asserted":true}` |
 | `upload_rom` | `begin` → `chunk` (base64) × N → `commit` | per-phase acks; `commit` returns `reset_vector` |
-| `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000}` | poll `read_event` for cycle/`done` |
-| `read_event` | `{"v":1,"cmd":"read_event"}` | `cycle` / `done` / `none` |
+| `read` | `{"v":1,"cmd":"read","until":"stp","max_cycles":10000,"batch_size":32,"release_reset":true}` | poll `read_event` for batched `cycles`/`done` |
+| `read_event` | `{"v":1,"cmd":"read_event","batch_size":32}` | `cycles` batch / `done` / `none` |
+| `clock` | `{"v":1,"cmd":"clock","hz":1000}` | `{"v":1,"ok":true,"cmd":"clock","hz":1000}` |
 | `request_addr` | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"addr":"4000","phi2_hz":1000}` |
-| `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles ASCII bus table (off by default) |
-| `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor) |
+| `peek` | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as hex |
+| `monitor` | `{"v":1,"cmd":"monitor","enable":true}` | toggles JSON bus monitor (off by default) |
+| `status` | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample) |
 
 > [!IMPORTANT]
 > Don't open a plain serial monitor on the port while using the Hardware API, and disable `monitor` before scripted upload/read; unstructured output corrupts framing. Use `--read-stp`, which disables it automatically.
@@ -264,16 +268,15 @@ with HardwareAPI("/dev/ttyACM0") as api:
 
     api.reset(assert_reset=True)                       # hold CPU in reset
     api.upload_rom(open("bin/rom.bin", "rb").read())   # chunked, base64-encoded upload
-    api.reset(assert_reset=False)                      # release → run
 
-    capture = api.read_until_stp(max_cycles=500)       # disables monitor; ~1 kHz PHI2
+    capture = api.read_until_stp(max_cycles=500)       # arm capture and release reset
     print(capture.reason, len(capture.cycles))
 ```
 
-A captured bus cycle looks like:
+A captured batch of bus cycles looks like:
 
 ```json
-{"v":1,"type":"event","event":"cycle","seq":1,"addr":"8000","data":"18","rw":0}
+{"v":1,"type":"event","event":"cycles","cycles":[{"seq":1,"addr":"8000","data":"18","rw":0}]}
 ```
 
 `rw` is **0 = read**, **1 = write**. On this build it is **inferred from A15** (ROM `$8000–$FFFF` → read, RAM `$0000–$7FFF` → write) because Pico 2 GP23 is not a usable header pin for CPU RWB. CPU RWB still drives RAM `WE#` for real writes. Store cycles should show `rw=1`; ROM fetches (including STP `$DB`) show `rw=0`.

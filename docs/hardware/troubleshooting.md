@@ -22,8 +22,9 @@ Symptoms seen during bring-up and their likely causes.
 | Symptom | Likely cause |
 |---|---|
 | Upload: Device or resource busy | Another program holds the serial port, close serial monitors first |
-| `ProtocolError: expected ACK … got 0x7C` | ASCII **monitor** still enabled, run `api.monitor(enable=False)` or start a `read` capture (auto-disables it); reflash if firmware is stale |
+| `ProtocolError: expected ACK … got 0x7C` | Legacy ASCII **monitor** still enabled (old firmware), run `api.monitor(enable=False)` or start a `read` capture (auto-disables it); reflash if firmware is stale — current firmware emits JSON monitor lines and suppresses them mid-exchange |
 | `ProtocolError: device NACK after EOT (0x15)` | Stale or mismatched firmware, rebuild and reflash `piclone.uf2` (`picotool load -f`) |
 | `ProtocolError` / timeout (other) | Wrong port, no firmware flashed, or a plain serial monitor is open on the port |
 | `TimeoutError` during capture | ROM missing **`STP` (`0xDB`)** at end of program, USB noise, or host `--timeout` too low — rebuild the ROM or raise `--timeout` / `frame_timeout` |
+| `unexpected frame during read` (single `cycle` event) | Host/firmware protocol mismatch: the Romulan branch expects batched `cycles` events, but the firmware returned a legacy single-`cycle` frame — rebuild/reflash Piclone from the matching source |
 | `ModuleNotFoundError: romulan` | Run host commands from the **Romulan** checkout (`~/Downloads/romulan`) with `uv run`, not from `src/build/` |

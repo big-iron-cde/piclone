@@ -13,13 +13,16 @@ and bundles a small JSON parser (cJSON) for the v1 Hardware API.
 3. **Reset control:** GP27 starts as OUTPUT LOW, then releases to INPUT (the pull-up runs
    the CPU) once USB is connected.
 4. **ROM emulation:** a 32 KB `rom_image[]` in SRAM, mapped to CPU `$8000–$FFFF`. When
-   A15 = 1, drive GP15–GP22 from `rom_image[addr & 0x7FFF]`; when A15 = 0, the data bus is
-   Hi-Z. Implemented with **GPIO polling** (reliable at the supported **0.1–1000 Hz** PHI2
-   range; PIO + DMA is a future upgrade for higher clocks).
+   A15 = 1 **and RWB is high** (read cycle), drive GP15–GP22 from `rom_image[addr & 0x7FFF]`;
+   otherwise the data bus is Hi-Z so the CPU can drive writes. Implemented with **GPIO polling**
+   (reliable at the supported **0.1–1000 Hz** PHI2 range; PIO + DMA is a future upgrade for
+   higher clocks).
 5. **Built-in demo program:** matches Romulan `demo.txt` — writes `$05` then `$14` then
    `$08` to RAM-side stores and ends in **`STP` (`$DB`)** so capture stops cleanly.
 6. **Hardware API:** structured host control over USB-CDC serial (see
-   [Hardware API](hardware-api.md)).
+   [Hardware API](hardware-api.md)). The `read` command returns batched `cycles` events
+   (up to `batch_size` cycles per `read_event` poll); `drive` can force the data bus for
+   diagnostics.
 
 ## Build
 
