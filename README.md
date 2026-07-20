@@ -160,7 +160,7 @@ The same address and data bus continues from the 65C02 to the HM62256 RAM (orang
 | Pico pin 32 (GP27) | 65C02 pin 40 (RESB) | Reset control |
 | Pico pin 34 (GP28) | 65C02 pin 37 (PHI2) | Clock at 1 kHz (default) |
 | *(optional)* Pico GP23 | 65C02 pin 34 (RWB) | Not used for protocol `rw` on Pico 2; firmware infers from A15 |
-| RAM pin 22 (OE#) | +3.3 V | Outputs disabled (writes only), avoids bus contention |
+|65C02 pin 34 (RWB)|  Inverter | RAM pin 22 (OE#)| Drive on reads, quiet on writes |
 
 ### Pull-up resistors (6 × 10 kΩ, all to +3.3 V)
 
