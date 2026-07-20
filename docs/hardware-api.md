@@ -49,7 +49,7 @@ All commands are JSON sent in a framed payload (host → Pico), and every reques
 | **read_event** | `{"v":1,"cmd":"read_event","batch_size":32}` | `cycles` batch / `done` / `none` while capture is armed |
 | **clock** | `{"v":1,"cmd":"clock","hz":1000}` | `{"v":1,"ok":true,"cmd":"clock","hz":1000}` |
 | **request_addr** | `{"v":1,"cmd":"request_addr"}` | `{"v":1,"ok":true,"cmd":"request_addr","addr":"4000","phi2_hz":1000}` |
-| **peek** | `{"v":1,"cmd":"peek","offset":28672,"count":16}` | bytes from `rom_image[offset]` as a hex string |
+| **peek** | `{"v":1,"cmd":"peek","offset":28672,"count":16}` or `{"v":1,"cmd":"peek","addr":"4000"}` | bytes from `rom_image[offset]` as a hex string, or one live bus/RAM byte |
 | **monitor** | `{"v":1,"cmd":"monitor","enable":true}` | enables/disables the JSON bus monitor (off by default) |
 | **status** | `{"v":1,"cmd":"status"}` | full hardware snapshot (clock, reset, ROM, monitor, last bus sample, raw pins) |
 | **drive** | `{"v":1,"cmd":"drive","value":"EA"}` or `{"v":1,"cmd":"drive","enable":false}` | force D0–D7 to a byte, or release the bus |
@@ -115,8 +115,12 @@ Returns the last address sampled on the bus (updated every PHI2 rising edge).
 
 ### peek
 
-Read back bytes from the currently loaded `rom_image[]`. Useful for verifying that an
-upload landed at the expected offsets before releasing RESET.
+One command, two modes, selected by which field is present (`addr` and `offset`
+together are rejected with `bad_request`; neither is also `bad_request`).
+
+**ROM-image mode** (`offset`, optional `count`) reads back bytes from the currently
+loaded `rom_image[]`. Useful for verifying that an upload landed at the expected
+offsets before releasing RESET.
 
 ```json
 {"v":1,"cmd":"peek","offset":28672,"count":16}
@@ -129,6 +133,29 @@ Response:
 ```
 
 `count` is capped at 64 bytes and clipped to the 32 KB ROM bounds.
+
+**Live mode** (`addr` as a hex string, with or without `0x`) reads one byte from
+the live bus: the firmware holds the CPU in reset, patches `LDA $addr` / `STP` at
+`$8000` (and points the reset vector there), runs the CPU briefly at 1 kHz, samples
+the bus cycle whose address matches `addr`, then restores the ROM bytes and clock
+speed. The CPU is left held in reset — do not rely on CPU state surviving a live
+peek.
+
+```json
+{"v":1,"cmd":"peek","addr":"4000"}
+```
+
+Response:
+
+```json
+{"v":1,"ok":true,"cmd":"peek","addr":"4000","data":"14"}
+```
+
+Errors: `busy` (a capture or upload is in progress), `no_cycle` (no matching bus
+cycle within 1 s — CPU not running or bus fault). Live mode reads live RAM only if
+**RAM OE# = NOT(RWB)** is wired; with OE# tied high it sees the open bus. Peeking
+the stub/vector bytes (`$8000`–`$8003`, `$FFFC`–`$FFFD`) returns the patched values
+the CPU saw mid-stub — use ROM-image mode for the stored bytes.
 
 ### status
 
