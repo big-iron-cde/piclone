@@ -47,4 +47,11 @@ bool hardware_api_exchange_active(void);
 bool hardware_api_drive_enabled(void);
 uint8_t hardware_api_drive_value(void);
 
+/* Diagnostic counters from the polling loop and clock alarm. Values are
+ * copied out and the internal counters are reset. Used by status. */
+void hardware_api_diag_read_reset(uint32_t *calls, uint32_t *edges,
+                                   uint32_t *high_no_edge,
+                                   uint32_t *low_no_edge,
+                                   uint32_t *alarm_fires);
+
 #endif
