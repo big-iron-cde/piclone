@@ -199,18 +199,23 @@ static void rom_task(void) {
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
     bool     a15  = (pins >> PIN_A15) & 1u;
 
-    if (hardware_api_drive_enabled()) {
-        gpio_set_dir_out_masked(DATA_MASK);
-        gpio_put_masked(DATA_MASK, (uint32_t)hardware_api_drive_value() << PIN_D_FIRST);
-    } else if (rom_active) {
-        if (a15) {
+    if (phi2) {
+        /* PHI2 high: address is stable. Safe to drive ROM or read RAM/CPU. */
+        if (hardware_api_drive_enabled()) {
+            gpio_set_dir_out_masked(DATA_MASK);
+            gpio_put_masked(DATA_MASK, (uint32_t)hardware_api_drive_value() << PIN_D_FIRST);
+        } else if (rom_active && a15) {
             uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
             uint8_t  byte = rom_image[addr];
             gpio_set_dir_out_masked(DATA_MASK);
             gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
         } else {
+            /* A15=0: let RAM (or CPU on writes) own the bus */
             gpio_set_dir_in_masked(DATA_MASK);
         }
+    } else {
+        /* PHI2 low: address is changing — always Hi-Z to prevent contention */
+        gpio_set_dir_in_masked(DATA_MASK);
     }
 
     if (phi2 && !phi2_last_state) {
@@ -234,11 +239,13 @@ static void rom_task(void) {
             uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
             emit_bus_cycle(addr, data, true);
         } else {
-            /* Write: Hi-Z and keep sampling while PHI2 is high. A fixed settle
-             * is too early on Pico W (CYW43/idle timing) → data=00, and a
-             * falling-edge sample can be too late → next opcode. The last
-             * sample before PHI2 falls matches the CPU write byte on both. */
-            gpio_set_dir_in_masked(DATA_MASK);
+            /* Lower-half bus cycle: keep sampling while PHI2 is high. A fixed
+             * settle is too early on Pico W (CYW43/idle timing) → data=00,
+             * and a falling-edge sample can be too late → next opcode.
+             * The last sample before PHI2 falls matches the bus byte on both
+             * Pico W and Pico 2. With the AS6C62256 this is a RAM read or
+             * CPU write; rw is reported as 1 (protocol write) because we have
+             * no RWB signal. */
             uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
             uint32_t guard_us = phi2_half_us + (phi2_half_us / 2u);
             if (guard_us < 10u) {

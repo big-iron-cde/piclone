@@ -582,7 +582,11 @@ static bool live_peek_run(uint16_t addr, uint8_t *out_data) {
     bool found = false;
     capture_sample_t s;
     while (capture_queue_pop(&s)) {
-        if (!found && s.addr == addr && s.rw == 0u) {
+        /* The stub is a known LDA $addr, so the target address is the value
+         * we want regardless of how the A15-based RWB heuristic classified it.
+         * This allows peek to work for RAM addresses ($0000-$7FFF) which would
+         * otherwise be recorded as writes. */
+        if (!found && s.addr == addr) {
             *out_data = s.data;
             found = true;
         }
