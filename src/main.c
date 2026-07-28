@@ -102,9 +102,11 @@ static int64_t phi2_alarm_callback(alarm_id_t id, void *user_data) {
     diag_alarm_fires++;
 
     if (phi2_current_state) {
-        /* PHI2 high → low: release the data bus before the address changes. */
-        gpio_set_dir_in_masked(DATA_MASK);
+        /* PHI2 high → low: clock the CPU first, then hold data valid for the
+         * 65C02 hold time before releasing the bus. */
         gpio_xor_mask(1u << PIN_PHI2);
+        busy_wait_us(1);
+        gpio_set_dir_in_masked(DATA_MASK);
         phi2_current_state = false;
     } else {
         /* PHI2 low → high: address is valid. Drive ROM data or release bus. */
@@ -276,19 +278,11 @@ static void rom_task(void) {
             uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
             emit_bus_cycle(addr, data, true);
         } else {
-            /* Lower-half bus cycle: sample repeatedly until PHI2 falls.
-             * The bus has been Hi-Z since PHI2 went low, so the CPU/SRAM
-             * already owns it by the time we reach the rising edge. */
+            /* Lower-half bus cycle: the bus is already Hi-Z from the alarm
+             * callback. Wait a couple of microseconds for CPU write data to
+             * settle, then sample once. */
+            busy_wait_us(2);
             uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
-            uint32_t guard_us = phi2_half_us;
-            if (guard_us < 10u) {
-                guard_us = 10u;
-            }
-            absolute_time_t deadline = make_timeout_time_us(guard_us);
-            while (gpio_get(PIN_PHI2) && !time_reached(deadline)) {
-                data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
-                tight_loop_contents();
-            }
             emit_bus_cycle(addr, data, false);
         }
     }

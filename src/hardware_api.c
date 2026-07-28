@@ -332,6 +332,9 @@ static void cmd_read(cJSON *root, const char *req_id) {
     if (release_reset) {
         hw.reset_assert();
         reset_asserted = true;
+        /* Hold reset low for 10 ms so the 65C02 reliably restarts, matching
+         * the pulse used in live_peek_run(). */
+        sleep_ms(10);
     }
 
     read_cycle_count = 0;
