@@ -332,6 +332,9 @@ static void cmd_read(cJSON *root, const char *req_id) {
     if (release_reset) {
         hw.reset_assert();
         reset_asserted = true;
+        /* Hold reset low for 10 ms so the 65C02 reliably restarts, matching
+         * the pulse used in live_peek_run(). */
+        sleep_ms(10);
     }
 
     read_cycle_count = 0;
@@ -559,6 +562,10 @@ static bool live_peek_run(uint16_t addr, uint8_t *out_data) {
     /* Run the stub fast regardless of the configured clock, then restore. */
     float saved_hz = *hw.current_hz;
     phi2_set_hz(LIVE_PEEK_HZ);
+    /* Hold reset low for 10 ms so the 65C02 exits STP/STOP and begins the
+     * reset sequence (>2 clock cycles at 1 kHz). Breadboard noise makes a
+     * longer pulse safer than the datasheet minimum. */
+    sleep_ms(10);
     hw.reset_release();
     reset_asserted = false;
 
@@ -582,7 +589,11 @@ static bool live_peek_run(uint16_t addr, uint8_t *out_data) {
     bool found = false;
     capture_sample_t s;
     while (capture_queue_pop(&s)) {
-        if (!found && s.addr == addr && s.rw == 0u) {
+        /* The stub is a known LDA $addr, so the target address is the value
+         * we want regardless of how the A15-based RWB heuristic classified it.
+         * This allows peek to work for RAM addresses ($0000-$7FFF) which would
+         * otherwise be recorded as writes. */
+        if (!found && s.addr == addr) {
             *out_data = s.data;
             found = true;
         }
@@ -730,6 +741,12 @@ static void cmd_status(const char *req_id) {
     snprintf(addr, sizeof(addr), "%04X", last_addr);
     snprintf(data, sizeof(data), "%02X", last_data);
 
+    uint32_t diag_calls, diag_edges, diag_high_no_edge, diag_low_no_edge;
+    uint32_t diag_alarm_fires;
+    hardware_api_diag_read_reset(&diag_calls, &diag_edges,
+                                  &diag_high_no_edge, &diag_low_no_edge,
+                                  &diag_alarm_fires);
+
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "v", HW_API_VERSION);
     json_attach_id(resp, req_id);
@@ -749,6 +766,11 @@ static void cmd_status(const char *req_id) {
     cJSON_AddNumberToObject(resp, "rwb", gpio_get(STATUS_PIN_RWB) ? 1 : 0);
     cJSON_AddNumberToObject(resp, "a15", gpio_get(STATUS_PIN_A15) ? 1 : 0);
     cJSON_AddNumberToObject(resp, "phi2", gpio_get(STATUS_PIN_PHI2) ? 1 : 0);
+    cJSON_AddNumberToObject(resp, "diag_calls", (double)diag_calls);
+    cJSON_AddNumberToObject(resp, "diag_edges", (double)diag_edges);
+    cJSON_AddNumberToObject(resp, "diag_high_no_edge", (double)diag_high_no_edge);
+    cJSON_AddNumberToObject(resp, "diag_low_no_edge", (double)diag_low_no_edge);
+    cJSON_AddNumberToObject(resp, "diag_alarm_fires", (double)diag_alarm_fires);
     json_send_object(resp);
     cJSON_Delete(resp);
 }
@@ -854,8 +876,9 @@ bool hardware_api_exchange_active(void) {
 
 void hardware_api_on_bus_cycle(uint16_t addr, uint8_t data, bool rwb_pin) {
     /* rwb_pin is read-high sense (not necessarily GPIO GP23). On this board
-     * main.c passes A15: ROM reads (high) → rw=0; RAM writes (low) → rw=1. */
-    uint8_t rw_report = rwb_pin ? 0u : 1u;
+     * main.c passes A15: ROM reads (high) → rw=0; lower-half (low) → rw=2
+     * because we cannot distinguish RAM reads from CPU writes without RWB. */
+    uint8_t rw_report = rwb_pin ? 0u : 2u;
 
     last_addr = addr;
     last_data = data;

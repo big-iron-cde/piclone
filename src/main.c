@@ -50,9 +50,17 @@ static uint8_t rom_image[ROM_SIZE];
 static bool rom_active = false;
 
 static bool     phi2_last_state  = false;
+static bool     phi2_current_state = false;
 static bool     reset_last_state = true;
 static float    current_hz       = PHI2_DEFAULT_HZ;
 static uint16_t seq_counter      = 1;
+
+/* Diagnostic counters for polling-loop health. Reset by status(). */
+static uint32_t diag_rom_task_calls      = 0;
+static uint32_t diag_phi2_rising_edges   = 0;
+static uint32_t diag_phi2_high_no_edge   = 0;
+static uint32_t diag_phi2_low_no_edge    = 0;
+static uint32_t diag_alarm_fires         = 0;
 
 // ─── Pin setup ───────────────────────────────────────────────────────────
 
@@ -85,10 +93,42 @@ static void pins_init(void) {
 static alarm_id_t phi2_alarm_id = 0;
 static uint32_t   phi2_half_us  = 0;
 
+/* Drive the data bus synchronously with PHI2 edges. This must be fast and
+ * deterministic; it runs from the alarm interrupt context. */
 static int64_t phi2_alarm_callback(alarm_id_t id, void *user_data) {
     (void)id;
     (void)user_data;
-    gpio_xor_mask(1u << PIN_PHI2);
+
+    diag_alarm_fires++;
+
+    if (phi2_current_state) {
+        /* PHI2 high → low: clock the CPU first, then hold data valid for the
+         * 65C02 hold time before releasing the bus. */
+        gpio_xor_mask(1u << PIN_PHI2);
+        busy_wait_us(1);
+        gpio_set_dir_in_masked(DATA_MASK);
+        phi2_current_state = false;
+    } else {
+        /* PHI2 low → high: address is valid. Drive ROM data or release bus. */
+        uint32_t pins = gpio_get_all();
+        bool     a15  = (pins >> PIN_A15) & 1u;
+
+        if (hardware_api_drive_enabled()) {
+            gpio_set_dir_out_masked(DATA_MASK);
+            gpio_put_masked(DATA_MASK, (uint32_t)hardware_api_drive_value() << PIN_D_FIRST);
+        } else if (rom_active && a15) {
+            uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
+            uint8_t  byte = rom_image[addr];
+            gpio_set_dir_out_masked(DATA_MASK);
+            gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
+        } else {
+            gpio_set_dir_in_masked(DATA_MASK);
+        }
+
+        gpio_xor_mask(1u << PIN_PHI2);
+        phi2_current_state = true;
+    }
+
     return (int64_t)phi2_half_us;
 }
 
@@ -99,6 +139,10 @@ static void phi2_start_us(uint32_t half_period_us) {
 
     phi2_half_us = half_period_us;
     if (phi2_half_us < 2) phi2_half_us = 2;
+
+    /* Resynchronise edge detectors. PHI2 starts low after this function. */
+    phi2_last_state = false;
+    phi2_current_state = false;
 
     phi2_alarm_id = add_alarm_in_us(phi2_half_us, phi2_alarm_callback, NULL, true);
 }
@@ -113,6 +157,12 @@ void phi2_set_hz(float hz) {
     uint32_t half_us = (uint32_t)(1000000.0f / (2.0f * hz));
     if (half_us < 2) {
         half_us = 2;
+    }
+
+    /* Idempotent: don't glitch the clock if the frequency is unchanged. */
+    if (phi2_alarm_id != 0 && phi2_half_us == half_us) {
+        current_hz = 1000000.0f / (2.0f * (float)phi2_half_us);
+        return;
     }
 
     if (phi2_alarm_id != 0) {
@@ -168,18 +218,19 @@ static void rom_image_init(void) {
 
 /* Emit one captured cycle to the Hardware API and optional JSON monitor. */
 static void emit_bus_cycle(uint16_t addr, uint8_t data, bool a15_read) {
-    /* Infer RWB from A15: ROM (A15=1) = read, RAM (A15=0) = write.
-     * GP23 is not a usable header pin for CPU RWB on Pico 2. */
+    /* Infer RWB from A15: ROM (A15=1) = read (rw=0), lower-half (A15=0) =
+     * unknown because GP23 is not a usable header pin for CPU RWB on Pico 2.
+     * Report rw=2 so the host does not assume write. */
     hardware_api_on_bus_cycle(addr, data, a15_read);
 
     if (hardware_api_monitor_enabled() && !hardware_api_is_reading()
         && !hardware_api_exchange_active()) {
         /* Unframed NDJSON monitor event (v1 output schema, same envelope as
-         * the romulan CLI). rw matches the protocol: read → 0, write → 1.
+         * the romulan CLI). rw: 0=read, 2=lower-half/unknown.
          * snprintf is used instead of cJSON to avoid a malloc per cycle. */
         printf("{\"v\":1,\"type\":\"event\",\"event\":\"monitor\",\"data\":"
                "{\"seq\":%u,\"addr\":\"%04X\",\"data\":\"%02X\",\"rw\":%u,\"hz\":%.1f}}\n",
-               (unsigned)seq_counter, addr, data, a15_read ? 0u : 1u, (double)current_hz);
+               (unsigned)seq_counter, addr, data, a15_read ? 0u : 2u, (double)current_hz);
         seq_counter++;
         if (seq_counter > 99) {
             seq_counter = 1;
@@ -197,23 +248,16 @@ static void rom_task(void) {
 
     uint32_t pins = gpio_get_all();
     bool     phi2 = (pins >> PIN_PHI2) & 1u;
-    bool     a15  = (pins >> PIN_A15) & 1u;
 
-    if (hardware_api_drive_enabled()) {
-        gpio_set_dir_out_masked(DATA_MASK);
-        gpio_put_masked(DATA_MASK, (uint32_t)hardware_api_drive_value() << PIN_D_FIRST);
-    } else if (rom_active) {
-        if (a15) {
-            uint16_t addr = (pins >> PIN_A_FIRST) & 0x7FFFu;
-            uint8_t  byte = rom_image[addr];
-            gpio_set_dir_out_masked(DATA_MASK);
-            gpio_put_masked(DATA_MASK, (uint32_t)byte << PIN_D_FIRST);
-        } else {
-            gpio_set_dir_in_masked(DATA_MASK);
-        }
+    diag_rom_task_calls++;
+    if (phi2 && phi2_last_state) {
+        diag_phi2_high_no_edge++;
+    } else if (!phi2 && !phi2_last_state) {
+        diag_phi2_low_no_edge++;
     }
 
     if (phi2 && !phi2_last_state) {
+        diag_phi2_rising_edges++;
         /* Rising edge — handle capture before driving the next ROM byte so a
          * deferred write sample cannot pick up Pico-driven opcode data. */
         pins = gpio_get_all();
@@ -234,27 +278,35 @@ static void rom_task(void) {
             uint8_t data = (uint8_t)((pins >> PIN_D_FIRST) & 0xFFu);
             emit_bus_cycle(addr, data, true);
         } else {
-            /* Write: Hi-Z and keep sampling while PHI2 is high. A fixed settle
-             * is too early on Pico W (CYW43/idle timing) → data=00, and a
-             * falling-edge sample can be too late → next opcode. The last
-             * sample before PHI2 falls matches the CPU write byte on both. */
-            gpio_set_dir_in_masked(DATA_MASK);
+            /* Lower-half bus cycle: the bus is already Hi-Z from the alarm
+             * callback. Wait a couple of microseconds for CPU write data to
+             * settle, then sample once. */
+            busy_wait_us(2);
             uint8_t data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
-            uint32_t guard_us = phi2_half_us + (phi2_half_us / 2u);
-            if (guard_us < 10u) {
-                guard_us = 10u;
-            }
-            absolute_time_t deadline = make_timeout_time_us(guard_us);
-            while (gpio_get(PIN_PHI2) && !time_reached(deadline)) {
-                data = (uint8_t)((gpio_get_all() >> PIN_D_FIRST) & 0xFFu);
-                tight_loop_contents();
-            }
             emit_bus_cycle(addr, data, false);
         }
     }
 
     phi2_last_state = phi2;
     busy = false;
+}
+
+/* Expose and reset polling-loop / alarm diagnostic counters. */
+void hardware_api_diag_read_reset(uint32_t *calls, uint32_t *edges,
+                                   uint32_t *high_no_edge,
+                                   uint32_t *low_no_edge,
+                                   uint32_t *alarm_fires) {
+    *calls = diag_rom_task_calls;
+    *edges = diag_phi2_rising_edges;
+    *high_no_edge = diag_phi2_high_no_edge;
+    *low_no_edge = diag_phi2_low_no_edge;
+    *alarm_fires = diag_alarm_fires;
+
+    diag_rom_task_calls = 0;
+    diag_phi2_rising_edges = 0;
+    diag_phi2_high_no_edge = 0;
+    diag_phi2_low_no_edge = 0;
+    diag_alarm_fires = 0;
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────────
