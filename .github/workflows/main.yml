@@ -17,7 +17,7 @@ jobs:
       matrix:
         board: [pico, pico_w, pico2, pico2_w]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7.0.1
 
     - name: Clone Pico SDK
       run: git clone -b master --recurse-submodules https://github.com/raspberrypi/pico-sdk.git /home/runner/tools/pico-sdk
