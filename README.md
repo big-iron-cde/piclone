@@ -60,7 +60,7 @@ The CPU sees a single 64 KB address space split by **A15**, which doubles as the
 flowchart LR
     CPU["W65C02S CPU"]
     Pico["Raspberry Pi Pico 2<br/>(ROM + clock + reset)"]
-    RAM["HM62256 SRAM"]
+    RAM["AS6C62256-55PCN SRAM"]
     Host["Host PC<br/>(Romulan)"]
 
     CPU <-->|"A0-A15 / D0-D7 bus"| Pico
@@ -74,12 +74,12 @@ flowchart LR
 Memory map:
 
 ```
-$0000 ─┬─────────────────┐
-       │   RAM (HM62256) │   A15 = 0  → RAM selected
-$7FFF ─┤                 │
-$8000 ─┼─────────────────┤
-       │   ROM (Pico)    │   A15 = 1  → Pico drives the bus
-$FFFF ─┴─────────────────┘
+$0000 ─┬─────────────────────────┐
+        │   RAM (AS6C62256-55PCN) │   A15 = 0  → RAM selected
+$7FFF ─┤                         │
+$8000 ─┼─────────────────────────┤
+        │   ROM (Pico)            │   A15 = 1  → Pico drives the bus
+$FFFF ─┴─────────────────────────┘
 ```
 
 When `A15 = 0` the RAM is selected and the Pico stays Hi-Z; when `A15 = 1` the Pico serves
@@ -92,7 +92,7 @@ CPU owns the data bus. The same wire deselects the RAM, so no inverter or decode
 |---|---|---|
 | Raspberry Pi Pico 2 | 1 | Acts as ROM + clock source |
 | W65C02S | 1 | The CPU |
-| HM62256LP | 1 | RAM. **5 V part run at 3.3 V, out of spec, may be flaky** |
+| AS6C62256-55PCN | 1 | 32 KB 3.3 V SRAM |
 | 10 kΩ resistor | 6 | Pull-ups for 65C02 control inputs |
 | External 3.3 V supply | 1 | Powers 65C02 + RAM + pull-ups |
 | Breadboard + jumper wires | 1 | Full-size (~830 tie-points) recommended |
@@ -101,11 +101,11 @@ CPU owns the data bus. The same wire deselects the RAM, so no inverter or decode
 
 ## Wiring
 
-This is the minimum wiring to reproduce the build. For the full per-chip pin-by-pin maps (40-pin W65C02S, 28-pin HM62256) and the complete Pico GPIO allocation, see the [hardware reference](https://big-iron-cde.github.io/piclone/hardware/pinout.html).
+This is the minimum wiring to reproduce the build. For the full per-chip pin-by-pin maps (40-pin W65C02S, 28-pin AS6C62256-55PCN) and the complete Pico GPIO allocation, see the [hardware reference](https://big-iron-cde.github.io/piclone/hardware/pinout.html).
 
 ### Board layout
 
-Component placement on the breadboard, left to right: the **3.3 V supply** (top-left), the **HM62256 RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order makes the two wiring diagrams below easier to follow.
+Component placement on the breadboard, left to right: the **3.3 V supply** (top-left), the **AS6C62256-55PCN RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order makes the two wiring diagrams below easier to follow.
 
 ![Breadboard layout: 3.3 V supply, RAM, 6502, and Pico placed left to right](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/circuitlayout.png)
 
@@ -119,9 +119,9 @@ The Pico drives the address bus and the ROM data bus, plus RESET and PHI2 (the g
 
 ### Diagram 2: 65C02 ↔ RAM
 
-The same address and data bus continues from the 65C02 to the HM62256 RAM (orange wires), with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on the right.
+The same address and data bus continues from the 65C02 to the AS6C62256-55PCN RAM (orange wires), with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on the right.
 
-![Wiring diagram of the W65C02S connected to the HM62256 RAM](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/ramhalf_circuit.png)
+![Wiring diagram of the W65C02S connected to the AS6C62256-55PCN RAM](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/ramhalf_circuit.png)
 
 ### Shared bus (65C02 ↔ Pico ↔ RAM)
 
@@ -340,7 +340,6 @@ sphinx-build docs docs/_build/html
 - [ ] Fail-safe data-bus behavior when the Pico is unpowered (currently back-powered through GPIO protection diodes).
 - [ ] Hot-swap ROM updates via CPU tri-state (BE is permanently held high today).
 - [ ] Add decoupling caps for noise immunity.
-- [ ] Replace HM62256 with an in-spec 3.3 V SRAM for reliable RAM reads.
 - [ ] PIO + DMA ROM emulation to replace GPIO polling for higher clock speeds.
 
 ## Contributing
@@ -359,7 +358,7 @@ Released under the [MIT License](https://github.com/big-iron-cde/piclone/blob/ma
 ## References
 
 - [W65C02S datasheet (WDC)](https://www.westerndesigncenter.com/wdc/documentation/w65c02s.pdf)
-- [HM62256 SRAM datasheet](https://datasheetspdf.com/datasheet/HM62256.html)
+- [AS6C62256-55PCN SRAM datasheet](https://www.alliancememory.com/wp-content/uploads/pdf/AS6C62256.pdf)
 - [Raspberry Pi Pico 2 datasheet](https://datasheets.raspberrypi.com/pico/pico-2-datasheet.pdf)
 - [Raspberry Pi Pico SDK documentation](https://www.raspberrypi.com/documentation/pico-sdk/)
 - [6502 opcode reference](https://www.masswerk.at/6502/6502_instruction_set.html)

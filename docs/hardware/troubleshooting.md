@@ -13,7 +13,6 @@ Symptoms seen during bring-up and their likely causes.
 | Reset vector fetches correct bytes but jumps to wrong address | Endianness, reset vector low byte at `$FFFC`, high byte at `$FFFD` |
 | Watch shows `$50` at `$5000` or `$40` at `$4000` | Address-line crosstalk onto the data bus, use `$4000` as the virtual print port |
 | Watch shows `$05` but never `$14`, or CPU crashes quickly | RAM OE# still on GND, move it to +3.3 V |
-| RAM reads return garbage (writes seem to work) | HM62256 at 3.3 V is out of spec, replace with 3.3 V SRAM for production |
 | Random behavior when touching the breadboard | Loose wire or missing decoupling, re-seat connections; a 100 nF cap helps |
 | Pico USB disconnects when the 65C02 boots | Brownout, the 3.3 V supply can't deliver enough current |
 

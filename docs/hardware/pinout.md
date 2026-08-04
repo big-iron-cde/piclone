@@ -85,7 +85,7 @@ pin 36 (BE, R4), pin 40 (RESB, R5), pin 38 (SOB, R6).
 **Special wire:** pin 34 (RWB) → **RAM pin 27 (WE#)** (not the Pico). This is how the CPU
 tells the RAM "I'm writing now."
 
-## HM62256LP: 28-pin DIP (top view, notch up)
+## AS6C62256-55PCN: 28-pin DIP (top view, notch up)
 
 ```
                 ┌────────U────────┐

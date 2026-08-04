@@ -44,5 +44,5 @@
    uv run romulan hardware capture --max-cycles 500 --port /dev/ttyACM0
    ```
 5. **RAM writes (optional):** a program that `STA`s to `$0200` (or `$4000`) can be observed
-   via `read` / `monitor`. With `OE#` tied high the HM62256 never drives the bus, so
+    via `read` / `monitor`. With `OE#` tied high the AS6C62256-55PCN never drives the bus, so
    `LDA` from RAM returns floating garbage. The built-in demo only writes to RAM.

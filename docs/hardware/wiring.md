@@ -6,7 +6,7 @@ One place to look while wiring. For the per-chip pin diagrams, see
 ## Circuit diagrams
 
 Component placement on the breadboard, left to right: the **3.3 V supply**, the
-**HM62256 RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order
+**AS6C62256-55PCN RAM**, the **W65C02S CPU**, and the **Raspberry Pi Pico 2**. Knowing this order
 makes the two wiring diagrams below easier to follow.
 
 ![Breadboard layout: 3.3 V supply, RAM, 6502, and Pico placed left to right](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/circuitlayout.png)
@@ -25,11 +25,11 @@ Purple wires are the shared A0–A15 / D0–D7 bus; the resistors are the 10 kΩ
 
 ### Diagram 2: 65C02 ↔ RAM
 
-The same address and data bus continues from the 65C02 to the HM62256 RAM (orange wires),
+The same address and data bus continues from the 65C02 to the AS6C62256-55PCN RAM (orange wires),
 with `RWB → WE#` for writes and `A15 → CE#` for chip-select. The 3.3 V supply module sits on
 the right.
 
-![Wiring diagram of the W65C02S connected to the HM62256 RAM](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/ramhalf_circuit.png)
+![Wiring diagram of the W65C02S connected to the AS6C62256-55PCN RAM](https://raw.githubusercontent.com/big-iron-cde/piclone/refs/heads/media/media/ramhalf_circuit.png)
 
 The connection tables below list every net precisely.
 
